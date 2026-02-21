@@ -115,16 +115,20 @@ err(std::format_string<Args...> fmt, Args &&...args)
   throw E(std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
-// Conservatively fails if file cannot be statted for any reason.
+// Conservatively fails if file is not a regular file or cannot be
+// statted for any reason.
 bool
-is_fd_at_path(int targetfd, int dfd, path file, bool follow = false)
+is_fd_at_path(int targetfd, int dfd, path file, bool follow = false,
+              struct stat *sbout = nullptr)
 {
-  struct stat sbfd, sbpath;
-  if (fstat(targetfd, &sbfd))
+  struct stat sbtmp, sbpath;
+  if (!sbout)
+    sbout = &sbtmp;
+  if (fstat(targetfd, sbout))
     syserr("fstat");
   if (fstatat(dfd, file.c_str(), &sbpath, follow ? 0 : AT_SYMLINK_NOFOLLOW))
     return false;
-  return sbfd.st_dev == sbpath.st_dev && sbfd.st_ino == sbpath.st_ino;
+  return sbout->st_dev == sbpath.st_dev && sbout->st_ino == sbpath.st_ino;
 }
 
 // Open an exclusive lockfile to guard one-time setup.  Might fail, in
@@ -137,10 +141,13 @@ openlock(int dfd, path file)
   Fd fd(openat(dfd, file.c_str(), O_RDWR | O_CLOEXEC | O_NOFOLLOW));
   if (fd) {
     if (!flock(*fd, LOCK_EX | LOCK_NB)) {
-      if (!is_fd_at_path(*fd, dfd, file))
+      struct stat sb;
+      if (!is_fd_at_path(*fd, dfd, file, false, &sb))
         // Someone may have unlinked after completing setup; fail and
         // expect the invoker to call again if setup isn't complete.
         fd.reset();
+      if (!S_ISREG(sb.st_mode))
+        err("{}: expected regular file", file.string());
       return fd;
     }
     if (errno != EWOULDBLOCK && errno != EINTR)
