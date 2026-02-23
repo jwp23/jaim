@@ -12,6 +12,7 @@
 #include <ranges>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 #include <set>
@@ -38,13 +39,18 @@ err(std::format_string<Args...> fmt, Args &&...args)
   throw E(std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
+template<auto F>
+using ArgType =
+    decltype([]<typename R, typename A>(R (*)(A)) -> A { throw; }(F));
+
 template<typename T, typename... Ts>
 concept is_one_of = (std::same_as<T, Ts> || ...);
 
 // Note that Destroy generally should not throw, whether or not it is
 // declared noexcept.  Only an explicit call to reset() will allow
 // exceptions to propagate.
-template<typename T, auto Empty, auto Destroy> struct RaiiHelper {
+template<auto Destroy, typename T = ArgType<Destroy>, auto Empty = T{}>
+struct RaiiHelper {
   T t_ = Empty;
 
   RaiiHelper() noexcept = default;
@@ -66,6 +72,11 @@ template<typename T, auto Empty, auto Destroy> struct RaiiHelper {
   explicit operator bool() const noexcept { return t_ != Empty; }
   const T &operator*() const noexcept { return t_; }
 
+  // Make it easier to use RaiiHelper with pointers in C libraries
+  template<std::same_as<T> U = T> requires std::is_pointer_v<U>
+  operator U() const { return t_; }
+  decltype(auto) operator->(this auto &&self) noexcept { return self.t_; }
+
   T release() noexcept { return std::exchange(t_, Empty); }
 
   template<is_one_of<T, decltype(Empty)> Arg>
@@ -79,7 +90,7 @@ template<typename T, auto Empty, auto Destroy> struct RaiiHelper {
 };
 
 // Self-closing file descriptor
-using Fd = RaiiHelper<int, -1, ::close>;
+using Fd = RaiiHelper<::close, int, -1>;
 
 namespace detail {
 struct NullaryInvoker {
@@ -90,11 +101,10 @@ struct NullaryInvoker {
 };
 } // namespace detail
 // Deferred cleanup action
-using Defer = RaiiHelper<std::move_only_function<void()>, nullptr,
-                         detail::NullaryInvoker{}>;
+using Defer = RaiiHelper<detail::NullaryInvoker{},
+                         std::move_only_function<void()>, nullptr>;
 
 using std::filesystem::path;
-
 
 // Compare paths component by component so subtrees are contiguous
 struct PathLess {
