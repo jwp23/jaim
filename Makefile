@@ -3,8 +3,8 @@ all: jai
 
 CXX ?= c++
 CXXFLAGS ?= -std=gnu++23 -Wall -Werror -ggdb
-CPPFLAGS += $(shell pkg-config --cflags mount)
-LDLIBS += $(shell pkg-config --libs mount)
+CPPFLAGS += $(shell pkg-config --cflags mount libacl)
+LDLIBS += $(shell pkg-config --libs mount libacl)
 
 OBJS = fs.o jai.o
 
