@@ -6,7 +6,7 @@ CXXFLAGS ?= -std=gnu++23 -Wall -Werror -ggdb
 CPPFLAGS += $(shell pkg-config --cflags mount)
 LDLIBS += $(shell pkg-config --libs mount)
 
-OBJS = file.o jai.o
+OBJS = fs.o jai.o
 
 all: jai
 
