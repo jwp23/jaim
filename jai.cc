@@ -1,7 +1,6 @@
 #include "jai.h"
 
 #include <cassert>
-#include <cstring>
 #include <print>
 
 #include <acl/libacl.h>
@@ -16,10 +15,12 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 path prog;
 
 constexpr const char *kRunRoot = "/run/jai";
+constexpr const char *kSB = "sandboxed-home";
 
 struct Config {
   std::string user_;
@@ -31,18 +32,22 @@ struct Config {
   Fd home_jai_fd_;
   Fd run_jai_fd_;
   Fd run_home_fd_;
-  ;
 
   void init();
-  Fd makemount();
-  Fd makens();
 
   Fd make_home_overlay();
+  Fd make_root_dir();
+  Fd make_ns();
 
   [[nodiscard]] Defer asuser();
   int homejai();
   int runjai();
   int runhome();
+
+  struct NsState {
+    Fd rootfd;
+    Fd pipefds[2];
+  };
 };
 
 void
@@ -82,112 +87,6 @@ Config::init()
   auto cleanup = asuser();
   if (!(homefd_ = open(homepath_.c_str(), O_PATH | O_CLOEXEC)))
     syserr("{}", homepath_.string());
-}
-
-Fd
-Config::makemount()
-{
-  Fd root =
-      open_tree(-1, "/", OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE);
-  if (!root)
-    syserr("open_tree(\"/\")");
-  struct mount_attr ro_private = {
-      .attr_set = MOUNT_ATTR_RDONLY,
-      .propagation = MS_PRIVATE,
-  };
-  if (mount_setattr(*root, "", AT_EMPTY_PATH | AT_RECURSIVE, &ro_private,
-                    sizeof(ro_private)) < 0)
-    syserr("mount_setattr(root)");
-
-  Fd tmp = fsopen("tmpfs", FSOPEN_CLOEXEC);
-  if (!tmp)
-    syserr("fsopen(tmpfs)");
-  if (fsconfig(*tmp, FSCONFIG_SET_STRING, "size", "10%", 0))
-    syserr("fsconfig(size)");
-  if (fsconfig(*tmp, FSCONFIG_SET_STRING, "mode", "01777", 0))
-    syserr("fsconfig(mode)");
-  if (fsconfig(*tmp, FSCONFIG_CMD_CREATE, NULL, NULL, 0))
-    syserr("fsconfig(CREATE)");
-  Fd mnt = fsmount(*tmp, FSMOUNT_CLOEXEC, 0);
-  if (!mnt)
-    syserr("fsmount(tmp)");
-  if (move_mount(*mnt, "", *root, "tmp", MOVE_MOUNT_F_EMPTY_PATH))
-    syserr(R"(move_mount("/tmp"))");
-  mnt.reset(open_tree(*root, "tmp", OPEN_TREE_CLONE));
-  if (!mnt)
-    syserr(R"(open_tree("/mnt/tmp"))");
-  if (move_mount(*mnt, "", *root, "var/tmp", MOVE_MOUNT_F_EMPTY_PATH))
-    syserr(R"(move_mount("/var/tmp"))");
-
-  return root;
-}
-
-Fd
-Config::makens()
-{
-  // Allocate a stack for clone, make sure we reap before freeing it.
-  constexpr size_t stack_size = 0x10'0000;
-  int pid = -1;
-  char *const stack = reinterpret_cast<char *>(malloc(stack_size));
-  Defer reap([&pid, stack] {
-    if (pid > 0)
-      while (waitpid(pid, nullptr, 0) == -1 && errno == EINTR)
-        ;
-    free(stack);
-  });
-
-  int pipefds[2];
-  if (pipe(pipefds))
-    syserr("pipe");
-
-  pid = clone(
-      +[](void *pipefds) -> int {
-        auto *fds = reinterpret_cast<int *>(pipefds);
-        close(fds[1]);
-        char c;
-        while (read(fds[0], &c, 1) > 0)
-          ;
-        return 0;
-      },
-      stack + stack_size, CLONE_NEWNS | SIGCHLD, pipefds);
-  int saved_errno = errno;
-
-  close(pipefds[0]);
-  // Fd child_block = pipefds[1];
-
-  if (pid == -1) {
-    errno = saved_errno;
-    syserr("clone");
-  }
-
-  path child_mnt(std::format("/proc/{}/ns/mnt", pid));
-  Fd nsmount =
-      open_tree(-1, child_mnt.c_str(), OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC);
-  if (!nsmount)
-    syserr(R"(open_tree("{}"))", child_mnt.string());
-
-  auto restore = asuser();
-  Fd target = xopenat(homejai(), ".", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
-  if (flock(*target, LOCK_EX | LOCK_NB))
-    syserr("flock TMPFILE");
-  if (linkat(*target, "", homejai(), "mnt", AT_EMPTY_PATH)) {
-    if (errno == EEXIST)
-      return {};
-    syserr(R"(linkat(TMPFILE, "{}/.jai/mnt"))", homepath_.string());
-  }
-  restore.reset();
-
-  // This won't work unless jaifd()/mnt is on an MS_PRIVATE mount
-  if (move_mount(AT_FDCWD, child_mnt.c_str(), homejai(), "mnt", 0)) {
-    saved_errno = errno;
-    auto x = std::format("id; ls -al {}", child_mnt.string());
-    system(x.c_str());
-    errno = saved_errno;
-    syserr(R"(move_mount("{}", "{}/.jai/mnt"))", child_mnt.string(),
-           homepath_.string());
-  }
-
-  return target;
 }
 
 Defer
@@ -237,7 +136,7 @@ Config::runjai()
   xmnt_move(*mfd, *ensure_dir(-1, kRunRoot, 0755, kFollow));
 
   run_jai_fd_ = ensure_dir(-1, kRunRoot, 0755, kFollow);
-  xmnt_propagate(*run_jai_fd_, MS_UNBINDABLE);
+  xmnt_propagate(*run_jai_fd_, MS_PRIVATE);
   xopenat(*run_jai_fd_, ".initialized", O_CREAT | O_WRONLY, 0444);
   unlink(lockfile.c_str());
   return *run_jai_fd_;
@@ -257,7 +156,6 @@ Config::runhome()
     syserr("acl_equiv_mode");
   else if (r == 0) {
     auto text = std::format("u::rwx,g::---,o::---,u:{}:r-x,m::r-x", uid_);
-    set_fd_acl(*run_home_fd_, text.c_str(), kAclDefault);
     set_fd_acl(*run_home_fd_, text.c_str(), kAclAccess);
   }
   return *run_home_fd_;
@@ -325,11 +223,131 @@ Config::make_home_overlay()
     syserr("fsconfig(FSCONFIG_SET_FD)");
   Fd mnt = make_mount(*fsfd);
 
-  Fd olhome = ensure_dir(runhome(), "sandboxed-home", 0755, kFollow);
+  Fd olhome = ensure_dir(runhome(), kSB, 0755, kFollow);
   xmnt_move(*mnt, *olhome);
   restore = asuser();
-  return xopenat(runhome(), "sandboxed-home",
-                 O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+  return xopenat(runhome(), kSB, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+}
+
+Fd
+Config::make_root_dir()
+{
+  auto mps = mountpoints();
+  int udir = runhome();
+  path upath = fdpath(udir, true);
+
+  Fd tmp;
+  if (path runtmp = upath / "tmp"; !mps.contains(runtmp)) {
+    tmp = make_tmpfs("gid", "0", "mode", "01777", "size", "40%");
+    xmnt_move(*tmp, *ensure_dir(udir, "tmp", 0755, kNoFollow));
+  }
+  else
+    tmp = xopenat(udir, "tmp", O_RDONLY | O_NOFOLLOW);
+
+  Fd home;
+  if (path runhome = upath / kSB; !mps.contains(runhome))
+    home = make_home_overlay();
+  else
+    home = xopenat(udir, kSB, O_RDONLY | O_NOFOLLOW);
+
+  Fd root = clone_tree(-1, "/", true);
+  xmnt_setattr(*root,
+               mount_attr{
+                   .attr_set = MOUNT_ATTR_RDONLY,
+                   .propagation = MS_PRIVATE,
+               },
+               AT_RECURSIVE);
+  xmnt_move(*clone_tree(*tmp), *root, "tmp", MOVE_MOUNT_BENEATH);
+  xmnt_move(*clone_tree(*tmp), *root, "var/tmp");
+  Fd homeclone = clone_tree(*home);
+  xmnt_propagate(*homeclone, MS_PRIVATE);
+  xmnt_move(*homeclone, *root, homepath_.relative_path());
+  return root;
+}
+
+static int
+init_ns(void *_s)
+{
+  int r = 0;
+  auto *s = static_cast<Config::NsState *>(_s);
+  s->pipefds[1].reset();
+  try {
+    xmnt_propagate(*xopenat(-1, "/", O_PATH), MS_PRIVATE, true);
+    xmnt_move(*s->rootfd, -1, "/mnt");
+    if (chdir("/mnt"))
+      syserr("/mnt");
+    if (syscall(SYS_pivot_root, ".", "."))
+      syserr("pivot_root");
+    chdir("/");
+    for (auto dir : {".", kRunRoot, "/tmp"}) {
+      if (umount2(dir, MNT_DETACH))
+        syserr("umount2({})", dir);
+    }
+  } catch (const std::exception &e) {
+    r = -1;
+    std::println(stderr, "{}", e.what());
+    fflush(stderr);
+  }
+  char c;
+  read(*s->pipefds[0], &c, 1);
+  return r;
+}
+
+Fd
+Config::make_ns()
+{
+  auto mps = mountpoints();
+  int udir = runhome();
+  path upath = fdpath(udir, true);
+
+  Fd lock;
+  for (;;) {
+    path nspath = upath / "ns";
+    if (mps.contains(nspath))
+      return xopenat(udir, "ns", O_RDONLY);
+    if (lock)
+      break;
+    lock = open_lockfile(udir, ".lock");
+  }
+  Defer _unlock([udir] { unlinkat(udir, ".lock", 0); });
+
+  NsState s{};
+  s.rootfd = make_root_dir();
+  {
+    int fds[2];
+    if (pipe(fds))
+      syserr("pipe");
+    s.pipefds[0] = fds[0];
+    s.pipefds[1] = fds[1];
+  }
+
+  int pid = -1;
+  auto stack = std::make_unique<std::array<char, 0x10'0000>>();
+  Defer reap([&pid] {
+    if (pid > 0)
+      while (waitpid(pid, nullptr, 0) == -1 && errno == EINTR)
+        ;
+  });
+
+  pid =
+      clone(init_ns, stack->data() + stack->size(), CLONE_NEWNS | SIGCHLD, &s);
+
+  s.pipefds[0].reset();
+  Fd ns = xopenat(udir, "ns", O_CREAT | O_RDWR, 0600);
+  Fd nsfs = xopenat(-1, std::format("/proc/{}/ns/mnt", pid), O_RDONLY);
+  Fd mnt = clone_tree(*nsfs);
+  xmnt_propagate(*mnt, MS_PRIVATE);
+  xmnt_move(*mnt, *ns);
+  s.pipefds[1].reset();
+
+  int status;
+  waitpid(pid, &status, 0);
+  if (status) {
+    umount2((upath / "ns").c_str(), MNT_DETACH);
+    unlinkat(udir, "ns", 0);
+    err("failed to create new namespace");
+  }
+  return mnt;
 }
 
 int
@@ -348,6 +366,6 @@ main(int argc, char **argv)
 #if 1
   Config conf;
   conf.init();
-  conf.make_home_overlay();
+  conf.make_ns();
 #endif
 }

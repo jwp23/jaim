@@ -154,7 +154,10 @@ PathSet mountpoints(path mountinfo = "/proc/self/mountinfo");
 // Calls fsconfig(FSCONFIG_CMD_CREATE) and fsmount.
 Fd make_mount(int conffd, int attr = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV);
 
-void xmnt_move(int mountfd, int mountpointfd, path mountpointfile = {});
+Fd clone_tree(int dfd, path file = {}, bool recursive = false);
+
+void xmnt_move(int mountfd, int mountpointfd, path mountpointfile = {},
+               int flags = 0);
 
 void xmnt_setattr(int fd, const mount_attr &a,
                   unsigned int flags = AT_RECURSIVE);
@@ -169,7 +172,7 @@ make_tmpfs(Opt... opt)
   if (!conf)
     syserr(R"(fsopen("tmpfs"))");
   auto options = std::to_array<const char *>({opt...});
-  for (auto i = 0uz; i < options.size() - 1; i+= 2)
+  for (auto i = 0uz; i < options.size() - 1; i += 2)
     if (fsconfig(*conf, FSCONFIG_SET_STRING, options[i], options[i + 1], 0))
       syserr(R"(fsconfig(tmpfs, "{}", "{}"))", options[i], options[i + 1]);
   return make_mount(*conf);
@@ -204,7 +207,9 @@ xopenat(int dfd, path file, int flags, mode_t mode = 0755)
 {
   if (int fd = openat(dfd, file.c_str(), flags, mode); fd >= 0)
     return fd;
-  syserr(R"(openat("{}", {})", file.string(), open_flags_to_string(flags));
+  syserr(R"(openat("{}", {}))",
+         dfd >= 0 ? (fdpath(dfd) / file).string() : file.string(),
+         open_flags_to_string(flags));
 }
 
 using ACL = RaiiHelper<acl_free, acl_t>;

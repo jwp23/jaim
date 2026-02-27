@@ -59,11 +59,23 @@ make_mount(int conffd, int attr)
   return ret;
 }
 
+Fd
+clone_tree(int dfd, path file, bool recursive)
+{
+  int flags =
+      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | OPEN_TREE_CLOEXEC | OPEN_TREE_CLONE;
+  if (recursive)
+    flags |= AT_RECURSIVE;
+  if (Fd ret = open_tree(dfd, file.c_str(), flags))
+    return ret;
+  syserr(R"(open_tree({}, "{}", 0x{:x}))", fdpath(dfd), file.string(), flags);
+}
+
 void
-xmnt_move(int mfd, int mpfd, path mpfile)
+xmnt_move(int mfd, int mpfd, path mpfile, int flags)
 {
   if (move_mount(mfd, "", mpfd, mpfile.c_str(),
-                 MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH))
+                 flags | MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH))
     syserr("move_mount({}, {}/{})", fdpath(mfd), fdpath(mpfd), mpfile.string());
 }
 
