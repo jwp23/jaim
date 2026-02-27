@@ -16,6 +16,8 @@
 #include <set>
 
 #include <fcntl.h>
+#include <sys/acl.h>
+#include <sys/mount.h>
 #include <unistd.h>
 
 template<typename T> concept has_no_cv = std::same_as<T, std::remove_cv_t<T>>;
@@ -148,7 +150,18 @@ subtree_rev(const PathSet &s, const path &root)
   return subtree(s, root) | std::views::reverse;
 }
 
+std::string fdpath(int fd, bool must = false);
+
 PathSet mountpoints(path mountinfo = "/proc/self/mountinfo");
+
+// Calls fsconfig(FSCONFIG_CMD_CREATE) and fsmount.
+Fd make_mount(int conffd, int attr = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV);
+
+void xmnt_move(int mountfd, int mountpointfd, path mountpointfile = {});
+
+void xmnt_setattr(int fd, const mount_attr &a,
+                  unsigned int flags = AT_RECURSIVE);
+void xmnt_propagate(int fd, std::uint64_t propagation, bool recursive = true);
 
 void recursive_umount(path tree);
 
@@ -181,3 +194,11 @@ xopenat(int dfd, path file, int flags, mode_t mode = 0755)
     return fd;
   syserr(R"(openat("{}", {})", file.string(), open_flags_to_string(flags));
 }
+
+using ACL = RaiiHelper<acl_free, acl_t>;
+
+enum AclType {
+  kAclAccess = ACL_TYPE_ACCESS,   // Set ACL on inode
+  kAclDefault = ACL_TYPE_DEFAULT, // Set ACL for files created in directory
+};
+void set_fd_acl(int fd, const char *acltext, AclType which = kAclAccess);

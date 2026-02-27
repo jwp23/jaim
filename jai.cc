@@ -10,9 +10,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <sched.h>
-#include <sys/acl.h>
 #include <sys/file.h>
-#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -213,28 +211,14 @@ Config::homejai()
   return *home_jai_fd_;
 }
 
-Fd
-make_mount(int conffd, int attr = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV,
-           decltype(mount_attr::propagation) propagation = MS_PRIVATE)
-{
-  Fd mnt =
-      fsmount(conffd, FSMOUNT_CLOEXEC, MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV);
-  if (!mnt)
-    syserr("fsmount");
-  mount_attr a{.propagation = propagation};
-  if (mount_setattr(*mnt, "", AT_EMPTY_PATH | AT_RECURSIVE, &a, sizeof(a)))
-    syserr("mount_setattr");
-  return mnt;
-}
-
 int
 Config::runjai()
 {
-  using namespace std::string_literals;
   if (run_jai_fd_)
     return *run_jai_fd_;
 
-  const auto lockfile = kRunRoot + ".lock"s;
+  static const auto lockfile = std::format("{}.lock", kRunRoot);
+
   Fd lock;
   for (;;) {
     struct stat sb;
@@ -247,27 +231,19 @@ Config::runjai()
   }
 
   // Get rid of any partially set up directories
-  while (!umount(kRunRoot))
-    ;
+  recursive_umount(kRunRoot);
 
   Fd jaiconf = fsopen("tmpfs", FSOPEN_CLOEXEC);
   if (!jaiconf)
     syserr(R"(fsopen("tmpfs"))");
   if (fsconfig(*jaiconf, FSCONFIG_SET_STRING, "size", "64M", 0) ||
-      fsconfig(*jaiconf, FSCONFIG_SET_STRING, "mode", "0755", 0) ||
-      fsconfig(*jaiconf, FSCONFIG_CMD_CREATE, nullptr, nullptr, 0))
+      fsconfig(*jaiconf, FSCONFIG_SET_STRING, "mode", "0755", 0))
     syserr(R"(fsconfig(tmpfs))");
-
   Fd mfd = make_mount(*jaiconf);
-  Fd mp = ensure_dir(-1, kRunRoot, 0755, kFollow);
-  if (move_mount(*mfd, "", *mp, "",
-                 MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH))
-    syserr("move_mount -> \"{}\"", kRunRoot);
+  xmnt_move(*mfd, *ensure_dir(-1, kRunRoot, 0755, kFollow));
+
   run_jai_fd_ = ensure_dir(-1, kRunRoot, 0755, kFollow);
-  mount_attr a{.propagation = MS_PRIVATE};
-  if (mount_setattr(*run_jai_fd_, "", AT_EMPTY_PATH | AT_RECURSIVE, &a,
-                    sizeof(a)))
-    syserr("mount_setattr");
+  xmnt_propagate(*run_jai_fd_, MS_UNBINDABLE);
   xopenat(*run_jai_fd_, ".initialized", O_CREAT | O_WRONLY, 0444);
   unlink(lockfile.c_str());
   return *run_jai_fd_;
@@ -280,7 +256,6 @@ Config::runhome()
     return *run_home_fd_;
 
   run_home_fd_ = ensure_dir(runjai(), user_, 0700, kNoFollow);
-
   RaiiHelper<acl_free, acl_t> acl = acl_get_fd(*run_home_fd_);
   if (!acl)
     syserr("acl_get_fd");
@@ -288,15 +263,9 @@ Config::runhome()
     syserr("acl_equiv_mode");
   else if (r == 0) {
     auto text = std::format("u::rwx,g::---,o::---,u:{}:r-x,m::r-x", uid_);
-    acl = acl_from_text(text.c_str());
-    if (!acl)
-      syserr(R"(acl_from_text("{}"))", text);
-    if (acl_valid(acl) != 0)
-      syserr(R"(acl_valid("{}"))", text);
-    if (acl_set_fd(*run_home_fd_, acl))
-      syserr("acl_set_fd");
+    set_fd_acl(*run_home_fd_, text.c_str(), kAclDefault);
+    set_fd_acl(*run_home_fd_, text.c_str(), kAclAccess);
   }
-
   return *run_home_fd_;
 }
 
@@ -355,8 +324,6 @@ overlay_mount(int lowerfd, int upperfd, int workfd)
       fsconfig(*fsfd, FSCONFIG_SET_FD, "upperdir", nullptr, upperfd) ||
       fsconfig(*fsfd, FSCONFIG_SET_FD, "workdir", nullptr, workfd))
     syserr("fsconfig(FSCONFIG_SET_FD)");
-  if (fsconfig(*fsfd, FSCONFIG_CMD_CREATE, nullptr, nullptr, 0))
-    syserr("fsconfig(FSCONFIG_CMD_CREATE)");
 
   return make_mount(*fsfd);
 }
@@ -371,10 +338,7 @@ Config::make_overlay()
 
   Fd mnt = overlay_mount(*homefd_, *changes, *work);
   Fd olhome = ensure_dir(runhome(), "sandboxed-home", 0755, kFollow);
-  if (move_mount(*mnt, "", *olhome, "",
-                 MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH))
-    syserr("move_mount");
-
+  xmnt_move(*mnt, *olhome);
   return xopenat(runhome(), "sandboxed-home",
                  O_RDONLY | O_CLOEXEC | O_DIRECTORY);
 }

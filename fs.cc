@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <print>
 
 #include <dirent.h>
@@ -9,6 +10,22 @@
 #include <sys/types.h>
 
 #include "jai.h"
+
+std::string
+fdpath(int fd, bool must)
+{
+  auto procfd = std::format("/proc/self/fd/{}", fd);
+  std::error_code ec;
+  auto res = std::filesystem::read_symlink(procfd, ec);
+  if (ec) {
+    if (must) {
+      errno = ec.value();
+      syserr("{}", procfd);
+    }
+    res = std::format("fd {} [can't determine path]", fd, ec.message());
+  }
+  return res;
+}
 
 PathSet
 mountpoints(path mountinfo)
@@ -31,15 +48,50 @@ mountpoints(path mountinfo)
   return res;
 }
 
+Fd
+make_mount(int conffd, int attr)
+{
+  if (fsconfig(conffd, FSCONFIG_CMD_CREATE, nullptr, nullptr, 0))
+    syserr("fsconfig(FSCONFIG_CMD_CREATE)");
+  Fd ret = fsmount(conffd, FSMOUNT_CLOEXEC, attr);
+  if (!ret)
+    syserr("fsmount");
+  return ret;
+}
+
+void
+xmnt_move(int mfd, int mpfd, path mpfile)
+{
+  if (move_mount(mfd, "", mpfd, mpfile.c_str(),
+                 MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH))
+    syserr("move_mount({}, {}/{})", fdpath(mfd), fdpath(mpfd), mpfile.string());
+}
+
+void
+xmnt_setattr(int fd, const mount_attr &a, unsigned int flags)
+{
+  flags |= AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
+  // Why mount_setattr takes a non-const mount_attr I don't understand...
+  if (mount_setattr(fd, "", flags, const_cast<mount_attr *>(&a), sizeof(a)))
+    syserr("mount_setattr({})", fdpath(fd));
+}
+
+void
+xmnt_propagate(int fd, std::uint64_t propagation, bool recursive)
+{
+  mount_attr a{.propagation = propagation};
+  xmnt_setattr(fd, a, recursive ? AT_RECURSIVE : 0);
+}
+
 void
 recursive_umount(path tree)
 {
-  auto dirs = subtree_rev(mountpoints(), root);
+  auto dirs = subtree_rev(mountpoints(), tree);
   for (const auto &dir : dirs) {
     if (umount2(dir.c_str(), UMOUNT_NOFOLLOW)) {
       std::println(stderr, R"(umount("{}"): {})", dir.string(),
                    strerror(errno));
-      if (umount2(dir.c_str(), UMOUNT_NOFOLLOW|MNT_DETACH) == 0)
+      if (umount2(dir.c_str(), UMOUNT_NOFOLLOW | MNT_DETACH) == 0)
         std::println(stderr, "did lazy unmount of {}\n", dir.string());
     }
   }
@@ -53,7 +105,7 @@ is_fd_at_path(int targetfd, int dfd, path file, FollowLinks follow,
   if (!sbout)
     sbout = &sbtmp;
   if (fstat(targetfd, sbout))
-    syserr("fstat");
+    syserr("fstat({})", fdpath(targetfd));
   if (fstatat(dfd, file.c_str(), &sbpath,
               follow == kFollow ? 0 : AT_SYMLINK_NOFOLLOW))
     return false;
@@ -68,8 +120,9 @@ is_dir_empty(int dirfd)
     syserr("dup");
   auto dir = fdopendir(fd);
   if (!dir) {
+    auto fdp = fdpath(fd);
     close(fd);
-    syserr("fdopendir");
+    syserr("fdopendir({})", fd);
   }
   Defer cleanup([dir] { closedir(dir); });
 
@@ -203,4 +256,24 @@ open_flags_to_string(int flags)
   if (auto n = result.size())
     result.resize(n - 1);
   return result;
+}
+
+void
+set_fd_acl(int fd, const char *acltext, AclType which)
+{
+  ACL acl = acl_from_text(acltext);
+  if (!acl)
+    syserr(R"(acl_from_text("{}"))", acltext);
+  if (acl_valid(acl) != 0)
+    syserr(R"(acl_validate("{}"))", acltext);
+
+  if (which == kAclAccess) {
+    if (acl_set_fd(fd, acl))
+      syserr(R"(acl_set_fd("{}", {}))", fdpath(fd), acltext);
+    return;
+  }
+
+  auto procfd = std::format("/proc/self/fd/{}", fd);
+  if (acl_set_file(procfd.c_str(), ACL_TYPE_DEFAULT, acl))
+    syserr(R"(acl_set_file("{}", DEFAULT, {}))", fdpath(fd), acltext);
 }
