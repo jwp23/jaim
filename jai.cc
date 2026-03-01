@@ -93,7 +93,7 @@ Config::init()
     envuser = u;
 
   for (;;) {
-    buf.resize(std::min(1uz, 2 * buf.size()));
+    buf.resize(std::max(128uz, 2 * buf.size()));
     if (realuid == 0 && envuser) {
       if (int r = getpwnam_r(envuser, &pwbuf, buf.data(), buf.size(), &pw); !r)
         break;
