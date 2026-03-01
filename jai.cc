@@ -95,13 +95,13 @@ Config::init()
   for (;;) {
     buf.resize(std::max(128uz, 2 * buf.size()));
     if (realuid == 0 && envuser) {
-      if (int r = getpwnam_r(envuser, &pwbuf, buf.data(), buf.size(), &pw); !r)
+      if (int r = getpwnam_r(envuser, &pwbuf, buf.data(), buf.size(), &pw); pw)
         break;
       else if (r != ERANGE)
         err("cannot find password entry for user {}", envuser);
     }
     else if (int r = getpwuid_r(realuid, &pwbuf, buf.data(), buf.size(), &pw);
-             !r)
+             pw)
       break;
     else if (r != ERANGE)
       err("cannot find password entry for uid {}", uid_);
@@ -314,7 +314,7 @@ Config::make_ns(const std::vector<path> &dirs)
   Fd oldns = xopenat(-1, "/proc/self/ns/mnt", O_RDONLY);
   Defer restore{[fd = *oldns] { setns(fd, CLONE_NEWNS); }};
   const mount_attr attr{
-      .attr_set = MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID,
+      .attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV,
       .propagation = MS_PRIVATE,
   };
 
@@ -325,7 +325,11 @@ Config::make_ns(const std::vector<path> &dirs)
 
   unshare(CLONE_NEWNS);
   Fd newns = xopenat(-1, "/proc/self/ns/mnt", O_RDONLY);
-  xmnt_setattr(-1, "/", attr);
+  xmnt_setattr(-1, "/",
+               mount_attr{
+                   .attr_set = MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID,
+                   .propagation = MS_PRIVATE,
+               });
 
   if (umount2(kRunRoot, MNT_DETACH))
     syserr("umount2({}, MNT_DETACH)", kRunRoot);
