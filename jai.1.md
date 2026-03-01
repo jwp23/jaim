@@ -46,7 +46,8 @@ assistant.
 If you forget to export some directory that you wanted the sandboxed
 tool to update, you will find changed files in `$HOME/.jai/changes`.
 You can destroy the sandbox with `jai -u`, move the changed files back
-into your home directory, and restart `jai`.
+into your home directory, and re-run `jai` with the appropriate `-d`
+flag.
 
 # EXAMPLES
 
