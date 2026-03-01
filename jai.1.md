@@ -45,12 +45,12 @@ assistant.
 
 # EXAMPLES
 
-    jai claude
+    jai -d ~/.claude claude
 
-    jai codex
+    jai -d ~/.codex codex
 
     mkdir -p ~/.local/share/opencode
-    jai -d $PWD -d $HOME/.config/opencode -d $HOME/.local/share/opencode opencode
+    jai -d ~/.config/opencode -d ~/.local/share/opencode opencode
 
 # OPTIONS
 
