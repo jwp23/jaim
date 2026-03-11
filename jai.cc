@@ -27,7 +27,6 @@ path prog;
 
 constexpr const char *kUnstrustedUser = UNTRUSTED_USER;
 constexpr const char *kRunRoot = "/run/jai";
-constexpr const char *kSB = "sandboxed-home";
 
 #define xsetns(fd, type)                                                       \
   do {                                                                         \
@@ -43,7 +42,7 @@ struct Config {
   Mode mode_{kCasual};
   std::string user_;
   path homepath_;
-  path fake_home_;
+  path sandbox_name_ = "default";
   Credentials user_cred_;
   Credentials untrusted_cred_;
 
@@ -298,13 +297,15 @@ Config::make_home_overlay()
   if (r)
     return std::move(*r);
 
-  Fd sandboxed_home = ensure_dir(run_jai_user(), kSB, 0755, kFollow, true);
+  path sb = cat(sandbox_name_, ".home");
+
+  Fd sandboxed_home = ensure_dir(run_jai_user(), sb, 0755, kFollow, true);
   if (is_mountpoint(*sandboxed_home))
     return sandboxed_home;
 
   auto restore = asuser();
-  Fd changes = make_blacklist(home_jai(), "changes");
-  Fd work = ensure_udir(home_jai(), "work");
+  Fd changes = make_blacklist(home_jai(), cat(sandbox_name_, ".changes"));
+  Fd work = ensure_udir(home_jai(), cat(sandbox_name_, ".work"));
   restore.reset();
 
   Fd fsfd = xfsopen("overlay", "jai-home");
@@ -316,7 +317,7 @@ Config::make_home_overlay()
 
   xmnt_move(*mnt, *sandboxed_home);
   restore = asuser();
-  return xopenat(run_jai_user(), kSB, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+  return xopenat(run_jai_user(), sb, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
 }
 
 Fd
@@ -389,14 +390,14 @@ Config::make_mnt_ns(const std::vector<path> &dirs)
   Fd home;
   Fd mapns;
   Credentials *sbcred = &user_cred_;
-  if (fake_home_.empty())
+  if (mode_ == kCasual)
     home = clone_tree(*make_home_overlay());
   else {
     sbcred = &untrusted_cred_;
     mapns = make_idmap_ns();
     attr.attr_set |= MOUNT_ATTR_IDMAP;
     attr.userns_fd = *mapns;
-    home = clone_tree(*ensure_udir(home_jai(), fake_home_));
+    home = clone_tree(*ensure_udir(home_jai(), sandbox_name_));
   }
   xmnt_setattr(*home, attr);
 
@@ -431,7 +432,7 @@ Config::make_mnt_ns(const std::vector<path> &dirs)
     restore_root = asuser();
     Fd dst = openat(-1, d.c_str(), O_DIRECTORY | O_PATH | O_CLOEXEC);
     if (!dst) {
-      if (fake_home_.empty() || (errno != EACCES && errno != ENOENT))
+      if (mode_ == kCasual || (errno != EACCES && errno != ENOENT))
         syserr("{}", d.string());
       restore_root.reset();
       restore_root = asuser(sbcred);
@@ -451,10 +452,12 @@ Config::unmount()
   Fd lock;
   while (!(lock = open_lockfile(run_jai_user(), ".lock")))
     ;
-  recursive_umount(path(kRunRoot) / user_);
+  recursive_umount(path(kRunRoot) / user_, false);
+
+  // XXX
+
   unlinkat(run_jai_user(), "tmp", AT_REMOVEDIR);
-  unlinkat(run_jai_user(), kSB, AT_REMOVEDIR);
-  unlinkat(run_jai_user(), "ns", 0);
+  //unlinkat(run_jai_user(), kSB, AT_REMOVEDIR);
   unlinkat(run_jai_user(), ".lock", 0);
   lock.reset();
   unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
@@ -547,7 +550,7 @@ Config::exec(int nsfd, const path &cwd, char **argv)
     _exit(1);
   }
 
-  if (fake_home_.empty())
+  if (mode_ == kCasual)
     user_cred_.make_real();
   else
     untrusted_cred_.make_real();
@@ -609,11 +612,12 @@ do_main(int argc, char **argv)
       opt_D = true;
       break;
     case 'h':
-      conf.fake_home_ = optarg;
-      if (conf.fake_home_.is_absolute() ||
-          std::ranges::distance(conf.fake_home_.begin(),
-                                conf.fake_home_.end()) != 1 ||
-          conf.fake_home_.c_str()[0] == '.') {
+      conf.mode_ = Config::kSecure;
+      conf.sandbox_name_ = optarg;
+      if (conf.sandbox_name_.is_absolute() ||
+          std::ranges::distance(conf.sandbox_name_.begin(),
+                                conf.sandbox_name_.end()) != 1 ||
+          conf.sandbox_name_.c_str()[0] == '.') {
         std::println(stderr, "{}: invalid home directory name", optarg);
         usage(2);
       }

@@ -3,14 +3,30 @@
 #include <filesystem>
 #include <print>
 
-#include <dirent.h>
 #include <libmount.h>
 #include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "defer.h"
 #include "fs.h"
+
+bool
+glob(std::string_view pattern, std::string_view target)
+{
+  if (pattern.empty())
+    return target.empty();
+  if (pattern.front() == '\\') {
+    if ((pattern = pattern.substr(1)).empty())
+      return false;
+  }
+  else if (pattern.front() == '*')
+    return glob(pattern.substr(1), target) ||
+           (!target.empty() && glob(pattern, target.substr(1)));
+  return !target.empty() && pattern.front() == target.front() &&
+         glob(pattern.substr(1), target.substr(1));
+}
 
 std::string
 fdpath(int fd, bool must)
@@ -133,7 +149,7 @@ xmnt_propagate(int fd, std::uint64_t propagation, bool recursive)
 }
 
 void
-recursive_umount(const path &tree)
+recursive_umount(const path &tree, bool detach)
 {
   auto mps = mountpoints();
   auto dirs = subtree_rev(mps, tree);
@@ -141,7 +157,7 @@ recursive_umount(const path &tree)
     if (umount2(dir.c_str(), UMOUNT_NOFOLLOW)) {
       std::println(stderr, R"(umount("{}"): {})", dir.string(),
                    strerror(errno));
-      if (umount2(dir.c_str(), UMOUNT_NOFOLLOW | MNT_DETACH) == 0)
+      if (detach && umount2(dir.c_str(), UMOUNT_NOFOLLOW | MNT_DETACH) == 0)
         std::println(stderr, "did lazy unmount of {}\n", dir.string());
     }
   }
@@ -165,17 +181,7 @@ is_fd_at_path(int targetfd, int dfd, const path &file, FollowLinks follow,
 bool
 is_dir_empty(int dirfd)
 {
-  int fd = dup(dirfd);
-  if (fd < 0)
-    syserr("dup");
-  auto dir = fdopendir(fd);
-  if (!dir) {
-    auto fdp = fdpath(fd);
-    close(fd);
-    syserr("fdopendir({})", fd);
-  }
-  Defer cleanup([dir] { closedir(dir); });
-
+  auto dir = xopendir(dirfd);
   while (auto de = readdir(dir))
     if (de->d_name[0] != '.' ||
         (de->d_name[1] != '\0' &&

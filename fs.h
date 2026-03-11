@@ -10,7 +10,9 @@
 #include <filesystem>
 #include <ranges>
 #include <set>
+#include <string_view>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/acl.h>
 #include <sys/mount.h>
@@ -27,6 +29,9 @@ cat(path left, const path &right)
 {
   return left += right;
 }
+
+// True is target matches pattern (with * expanded)
+bool glob(std::string_view pattern, std::string_view target);
 
 // Compare paths component by component so subtrees are contiguous
 struct PathLess {
@@ -107,7 +112,7 @@ make_tmpfs(const char *source, Opt... opt)
   return make_mount(*conf);
 }
 
-void recursive_umount(const path &tree);
+void recursive_umount(const path &tree, bool detach = true);
 
 enum class FollowLinks {
   kNoFollow = 0,
@@ -184,6 +189,31 @@ xopenat(int dfd, const path &file, int flags, mode_t mode = 0755)
   syserr(R"(openat("{}", {}))",
          dfd >= 0 ? (fdpath(dfd) / file).string() : file.string(),
          open_flags_to_string(flags));
+}
+
+inline Fd
+xdup(int fd)
+{
+  auto ret = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+  if (ret == -1)
+    syserr("F_DUPFD_CLOEXEC");
+  fcntl(ret, F_SETFD, 1);
+  return ret;
+}
+
+inline RaiiHelper<closedir>
+xopendir(int dfd, path file = {})
+{
+  Fd fd;
+  if (file.empty())
+    fd = xdup(dfd);
+  else
+    fd = xopenat(dfd, file, O_RDONLY | O_DIRECTORY);
+  if (auto d = fdopendir(*fd)) {
+    fd.release();
+    return d;
+  }
+  syserr("fdopendir({})", fdpath(dfd, file));
 }
 
 inline std::array<Fd, 2>
