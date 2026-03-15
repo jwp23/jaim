@@ -810,6 +810,7 @@ do_main(int argc, char **argv)
   Config conf;
   conf.init_credentials();
   auto restore = conf.asuser();
+  conf.cwd(); // compute and cache while privileges lowered
 
   bool opt_u{};
   std::vector<path> opt_d;
