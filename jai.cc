@@ -95,8 +95,10 @@ struct Config {
   void mask_warn()
   {
     if (mask_warn_) {
-      warn("--mask did nothing because ~/.jai/{}.changes already existed",
-           sandbox_name_.string());
+      warn(R"(--mask ignored because {5}/{0}/{1}.home already mounted.
+{2:>{3}}  Run "{4} -u" to unmount overlays.)",
+           user_, sandbox_name_.string(), "", prog.filename().string().size(),
+           prog.filename().string(), kRunRoot);
       mask_warn_ = false;
     }
   }
@@ -293,10 +295,6 @@ Config::make_blacklist(int dfd, path name)
 {
   Fd blacklistfd = ensure_dir(dfd, name.c_str(), 0700, kFollow);
   check_user(*blacklistfd);
-  if (!is_dir_empty(*blacklistfd)) {
-    mask_warn();
-    return blacklistfd;
-  }
 
   for (path p : mask_files_) {
     try {
@@ -576,104 +574,13 @@ Config::unmountall()
   unlinkat(run_jai(), user_.c_str(), AT_REMOVEDIR);
 }
 
-auto env_blacklist = std::to_array<const char *>({
-    // Azure
-    "AZURE_CLIENT_ID",
-    "AZURE_TENANT_ID",
-    // Databases (connection URIs contain embedded credentials)
-    "DATABASE_URL",
-    "MONGO_URI",
-    "MONGODB_URI",
-    "REDIS_URL",
-    // GCP
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    // Docker / K8s
-    "KUBECONFIG",
-    // Bitbucket
-    "BB_AUTH_STRING",
-    // Sentry
-    "SENTRY_DSN",
-    // Slack
-    "SLACK_WEBHOOK_URL",
-    // Suffixes
-    "*_ACCESS_KEY",
-    "*_API_KEY",
-    "*_APIKEY",
-    "*_AUTH",
-    "*_AUTH_TOKEN",
-    "*_CONNECTION_STRING",
-    "*_CREDENTIAL",
-    "*_CREDENTIALS",
-    "*_PASSWD",
-    "*_PASSWORD",
-    "*_PID",
-    "*_PRIVATE_KEY",
-    "*_PWD",
-    "*_SECRET",
-    "*_SECRET_KEY",
-    "*_SOCK",
-    "*_SOCKET",
-    "*_SOCKET_PATH",
-    "*_TOKEN",
-});
-
-const auto default_masklist = std::to_array<const char *>({
-    ".jai",
-    ".ssh",
-    ".gnupg",
-    ".local/share/keyrings",
-    ".netrc",
-    ".git-credentials",
-    ".aws",
-    ".azure",
-    ".config/gcloud",
-    ".config/gh",
-    ".config/Keybase",
-    ".config/kube",
-    ".docker",
-    ".password-store",
-    ".mozilla",
-    ".config/chromium",
-    ".config/google-chrome",
-    ".config/BraveSoftware",
-    ".bash_history",
-    ".zsh_history",
-});
-
 void
 Config::make_default_conf()
 {
   auto fd = xopenat(home_jai(), ".", O_RDWR | O_TMPFILE | O_CLOEXEC, 0600);
-  std::string text =
-      R"(# The executed process will have PID 1, which can confuse some
-# programs.  Adding "; exit $?" after the command and arguments will
-# cause bash to fork and stay around, so command "$0" has PID 2.
-
-command "$0" "$@"; exit $?
-
-# Masked file wills be deleted when a new overlayfs is first created,
-# but have no effect on existing overlays.  To delete files from an
-# existing overlay, delete them under /run/jai/$USER/default.home.  If
-# you want to start over with a fresh overlay, you can run "jai -u" to
-# unmount any existing overlays, then remove the directory
-# $HOME/.jai/$USER/default.changes.  The next time you run jai, it
-# will create a new overlay masking all of the files below.
-
-)";
-  for (auto p : default_masklist)
-    text += std::format("mask {}\n", p);
-
-  text += R"(
-# The following environment variables will be removed from sandboxed
-# environments.  You can use * as a wildcard to match any variables
-# matching the pattern.
-
-)";
-  for (auto e : env_blacklist)
-    text += std::format("unsetenv {}\n", e);
-
   errno = EAGAIN;
-  if (write(*fd, text.data(), text.size()) != text.size())
+  if (write(*fd, default_conf.data(), default_conf.size()) !=
+      default_conf.size())
     syserr("write(O_TMPFILE for default.conf)");
   if (linkat(*fd, "", home_jai(), "default.conf", AT_EMPTY_PATH) &&
       errno != EEXIST)

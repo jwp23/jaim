@@ -26,3 +26,5 @@ xfork(std::uint64_t flags = 0)
       exit(1);                                                                 \
     }                                                                          \
   } while (0)
+
+extern const std::string default_conf;

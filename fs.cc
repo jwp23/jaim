@@ -236,21 +236,27 @@ make_whiteout(int dfd, const path &inp)
     err<std::logic_error>(R"(make_whiteout: "{}" is not a relative path)",
                           inp.string());
 
-  Fd dirholder;
-  if (p.has_parent_path()) {
-    dirholder = ensure_dir(dfd, p.parent_path(), 0700, kNoFollow, false);
-    dfd = *dirholder;
-    p = p.filename();
-  }
+  try {
+    Fd dirholder;
+    if (p.has_parent_path()) {
+      dirholder = ensure_dir(dfd, p.parent_path(), 0700, kNoFollow, false);
+      dfd = *dirholder;
+      p = p.filename();
+    }
 
-  auto olduid = geteuid();
-  seteuid(0);
-  int err = 0;
-  if (mknodat(dfd, p.filename().c_str(), S_IFCHR, 0))
-    err = errno;
-  seteuid(olduid);
-  if ((errno = err))
-    syserr("mknod {}/.jai c 0 0", fdpath(dfd, p));
+    auto olduid = geteuid();
+    seteuid(0);
+    int err = 0;
+    if (mknodat(dfd, p.filename().c_str(), S_IFCHR, 0))
+      err = errno;
+    seteuid(olduid);
+    if ((errno = err))
+      syserr("mknod {}/.jai c 0 0", fdpath(dfd, p));
+  } catch (const std::system_error &e) {
+    if (e.code() != std::errc::not_a_directory &&
+        e.code() != std::errc::file_exists)
+      throw;
+  }
 }
 
 bool
