@@ -75,7 +75,7 @@ series of lines of the form "*option* [*value*]".  *option* can be any
 long command-line option without the leading `--`, for example:
 
     conf default.conf
-    casual
+    mode casual
     dir /local/build
     mask Mail
 
@@ -89,7 +89,7 @@ commands.  For instance, you might create a file `python.conf` with
 the following:
 
     conf default.conf
-    strict
+    mode strict
     dir /home/user/venv
     name python
     command source /home/user/venv/bin/activate; "$0" "$@"

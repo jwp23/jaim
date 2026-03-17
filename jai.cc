@@ -507,11 +507,9 @@ Config::unmount()
     ;
 
   auto runuser = path(kRunRoot) / user_;
-  for (const char *ext : {".home", ".tmp"}) {
-    auto mp = runuser / cat(sandbox_name_, ext);
-    umount2(mp.c_str(), UMOUNT_NOFOLLOW);
-    unlinkat(run_jai_user(), mp.filename().c_str(), AT_REMOVEDIR);
-  }
+  auto mp = runuser / cat(sandbox_name_, ".home");
+  umount2(mp.c_str(), UMOUNT_NOFOLLOW);
+  unlinkat(run_jai_user(), mp.filename().c_str(), AT_REMOVEDIR);
 
   unlinkat(run_jai_user(), ".lock", 0);
   lock.reset();
@@ -797,7 +795,7 @@ do_main(int argc, char **argv)
       R"(Use FILE as configuration file (relative to ~/.jai)
 default: CMD.conf or default.conf if CMD.conf does not exist)",
       "FILE");
-  (*opts)("--help", [] { usage(1); });
+  (*opts)("--help", [] { usage(0); });
   (*opts)("--version", version, "Print copyright and version then exit");
   option_help = opts->help();
 
