@@ -23,13 +23,14 @@ files.  Compared to the latter, `jai` can reduce the blast radius
 should things go wrong.
 
 By default, if you run "`jai` *cmd* [*arg*]...", it will execute *cmd*
-with the specified arguments in a lightweight sandbox that has full
+with the specified arguments in a lightweight jail that has full
 access to the current working directory and everything below,
 copy-on-write access to an overlay mount of your home directory,
 private `/tmp` and `/var/tmp` directories, and read-only access to
 everything else.  This is known as _casual mode_, because *cmd* can
-read most sensitive files on the system, so jai prevents *cmd* from
-clobbering all your files but doesn't provide any confidentiality.
+read most sensitive files on the system.  In other words, jai prevents
+*cmd* from clobbering all your files, but doesn't provide much
+confidentiality.
 
 If you run `jai -mstrict` *cmd* [*arg*]...", then *cmd* will be run
 with an empty home directory as an unprivileged user id, but with the
@@ -39,12 +40,10 @@ available read-only, because *cmd* is running with a different user
 ID, it will not be able to read sensitive files accessible to the
 user.
 
-Before using `jai`, if your home directory is on NFS, make
-`$HOME/.jai` a symbolic link to a directory you own on a local file
-system that supports extended attributes.  Otherwise, overlay mounts
-may not work and you may only be able to use strict mode (see below).
-Note that strict mode will not work with a home directory on NFS, but
-you can use bare mode.
+If your home directory is on NFS, set the `JAI_CONFIG_DIR` environment
+variable to a directory that you own on a local file system supporting
+extended attributes.  Otherwise, overlay mounts may not work and you
+may only be able to use bare mode (see below).
 
 If you want to grant access to directories other than the current
 working directory, you can specify addition directories with the `-d`
@@ -52,8 +51,8 @@ option, as in `jai -d /local/build untrusted_program`.  If you don't
 want to grant access to the current working directory, use the `-D`
 option.
 
-If you forget to export some directory that you wanted the sandboxed
-tool to update, you will find changed files in
+If you use casual mode and forget to export some directory that you
+wanted the mailed tool to update, you will find changed files in
 `$HOME/.jai/default.changes`.  You can destroy the sandbox with `jai
 -u`, move the changed files back into your home directory, and re-run
 `jai` with the appropriate `-d` flag.
@@ -63,13 +62,13 @@ home directory other than the default, just give it a name with the
 `-n` option and it will be created on demand.  When you specify a home
 directory with `-n`, strict mode becomes the default (unless there is
 no unprivileged `jai` user on your system, in which case it falls back
-to bare mode).  However, you can have multiple home overlays by
+to bare mode).  It is possible to have multiple home overlays by
 specifying `-mcasual` with `-n`.
 
 # CONFIGURATION
 
 If *cmd* does not contain any slashes, configuration is taken from
-`$HOME/.jai/`*cmd*`.conf`, or if no such file exists, from
+`$HOME/.jai/`*cmd*`.conf`, or, if no such file exists, from
 `$HOME/.jai/default.conf`.  The format of the configuration file is a
 series of lines of the form "*option* [*value*]".  *option* can be any
 long command-line option without the leading `--`, for example:
@@ -79,9 +78,9 @@ long command-line option without the leading `--`, for example:
     dir /local/build
     mask Mail
 
-Within a configuration file, the `conf` directive acts like an include
-directive, and includes another configuration file at the exact point
-of the `conf` directive.
+Within a configuration file, `conf` acts like an include directive,
+logically replacing the `conf` line with the contents of another
+configuration file.  (Relative paths are relative to `$HOME/.jai/`.)
 
 jai executes programs with bash.  The `command` directive allows you
 to reconfigure the environment or add command-line options to certain
@@ -90,9 +89,9 @@ the following:
 
     conf default.conf
     mode strict
-    dir /home/user/venv
+    dir venv
     name python
-    command source /home/user/venv/bin/activate; "$0" "$@"
+    command source $HOME/venv/bin/activate; "$0" "$@"
 
 Then when running `jai python`, this configuration file will load a
 virtual environment before running the command.
@@ -115,31 +114,32 @@ virtual environment before running the command.
   If no configuration file is specified, the default is based on the
   *cmd* argument.  If *cmd* contains no slashes and does not start
   with `.`, the system will use `$HOME/.jai/`*cmd*`.conf` if such a
-  file exists.  Otherwise the file `$HOME/.jai/default.conf` is used.
+  file exists.  Otherwise it uses `$HOME/.jai/default.conf`.
 
-  Note that the command-line arguments are parsed both before and
-  after the file specified by this option, so that command-line
-  options always take precedence.  When `conf` is specified in a
-  configuration file, the behavior is different.  The specified file
-  is read at the exact point of the `conf` directive, so that it
-  overrides previous lines and is overridden by subsequent lines.
+  Note that command-line arguments are parsed both before and after
+  the file specified by the `-C` or `--conf` option.  Hence,
+  command-line options always take precedence over configuration
+  files.  When `conf` is specified in a configuration file, however,
+  the behavior is different.  The specified file is read at the exact
+  point of the `conf` directive, so overriding previous lines and
+  getting overridden by subsequent lines.
 
 `-d` *dir*, `--dir` *dir*
 : Grant full access to directory *dir* and everything below in the
-  jail.  You must own the directory.  You can supply this option
-  multiple times.  Note that on the command line, relative paths are
-  relative to the current working directory, while in configuration
-  files, they are relative to your home directory.
+  jail.  You must own *dir*.  You can supply this option multiple
+  times.  Note that on the command line, relative paths are relative
+  to the current working directory, while in configuration files, they
+  are relative to your home directory.
 
 `-D`, `--nocwd`
 : By default, `jai` grants access to the current working directory
   even if it is not specified with `-d`.  This option suppresses that
   behavior.  If you run with `-D` and no `-d` options, your entire
-  home directory will be copy-on-write and nothing will be directly
-  exported.
+  home directory will be copy-on-write (in casual mode) or empty (in
+  bare or strict mode) and nothing will be directly exported.
 
 `-m casual`|`bare`|`strict`, `--mode casual`|`bare`|`strict`
-: Set the execution mode.  In casual mode, the user's home directory
+: Set jai's execution mode.  In casual mode, the user's home directory
   is made available as an overlay mount.  Casual mode protects against
   destruction of files outside of granted directories, but does not
   protect confidentiality:  sandboxed code can read most files
@@ -164,9 +164,14 @@ virtual environment before running the command.
 : jai allows you to have multiple sandboxed home directories, which
   may be useful when sandboxing multiple tools that should not have
   access to each other's API keys.  This option specifies which home
-  directory you to use.  If no such sandbox exists yet, it will be
-  created on demand.  When not specified, the default is just
-  `default`.
+  directory to use.  If no such sandbox exists yet, it will be created
+  on demand.  When not specified, the default is just `default`.  Note
+  that each name can be associated with both a casual home directory
+  (accessible at `/run/jai/$USER/`*name*`.home`, with changes in
+  `$HOME/.jai/`*name*`.changes`) and a strict/bare home directory (in
+  `$HOME/.jai/`*name*`.home`).  There is no special relation between
+  these home directories, but casual and strict sandboxes by the same
+  name do share the same `/tmp` directory.
 
 `--mask` *file*
 : When creating an overlay home directory, create a "whiteout" file to
@@ -181,7 +186,8 @@ virtual environment before running the command.
 : Filters *var* from the environment of the sandboxed program.  Can be
   the simple name of an environment variable, or can use the wildcard
   `*` as in `*_PID`.  (Since sandboxed processes don't see outside
-  processes anyway, you might as well filter out any PIDs.)
+  processes, you might as well filter any PIDs exposed in environment
+  variables to avoid confusion.)
 
 `--command` *bash-command*
 : jai launches the sandboxed program you specify by running
@@ -196,11 +202,12 @@ virtual environment before running the command.
   overlay-related files in `$HOME/.jai/*.work` that the user might not
   be able to clean up without root.  This option also destroys the
   private `/tmp` and `/var/tmp` directories (same directory at both
-  mount points), so make sure you don't need anything in there.  You
-  must use this option if you have added new files to be masked, as
-  masking only takes effect at the time an overlay home is created.
-  Note this option only impacts casual mode, as strict mode does not
-  employ overlays.
+  mount points), so make sure you don't need anything in there.
+
+  Many configuration choices apply only when a sandbox is first
+  created, so you must run `jai -u` to change them.  In particular,
+  you must use this option if you have added new files to be masked,
+  as masking only takes effect at the time an overlay home is created.
 
 `--version`
 : Prints the version number and copyright.
@@ -208,13 +215,22 @@ virtual environment before running the command.
 # ENVIRONMENT
 
 `SUDO_USER`, `USER`
-: If run with real UID 0 and either of these environment variables
-  exists, it will be taken as the user whose home directory should be
-  sandboxed.  This makes it convenient to run `jai` via `sudo` if you
-  don't want to install it setuid root.  If both are set, `SUDO_USER`
-  takes precedence.
+: If jai is invoked with real UID 0 and either of these environment
+  variables exists, it will be taken as the user whose home directory
+  should be sandboxed.  This makes it convenient to run `jai` via
+  `sudo` if you don't want to install it setuid root.  If both are
+  set, `SUDO_USER` takes precedence.
+
+`JAI_CONFIG_DIR`
+: Location of jai configuration files and private home directories, by
+  default `$HOME/.jai`.  If your home directory is on NFS, you may
+  wish to put your private home directories elsewhere in order to use
+  casual mode.
 
 # FILES
+
+In the following paths, the location `$HOME/.jai` can be changed by
+setting the `JAI_CONFIG_DIR` environment variable.
 
 `$HOME/.jai/default.conf`, `$HOME/.jai/`*cmd*`.conf`
 : Configuration file if none is specified with `-C`.  If there is a
@@ -259,6 +275,3 @@ new `default.changes` directory to get around mounting errors.
 
 There is no way to reverse an `unsetenv` or `mask` configuration
 option.
-
-If you run `jai -u` while any casual jails are still in use, you will
-not be able to recreate the overlay until the old processes exit.

@@ -38,6 +38,7 @@ struct Config {
 
   std::string user_;
   path homepath_;
+  path homejaipath_;
   path sandbox_name_;
   Credentials user_cred_;
   Credentials untrusted_cred_;
@@ -118,7 +119,7 @@ bool
 Config::parse_config_file(path file, Options *opts)
 {
   bool slash = std::ranges::distance(file.begin(), file.end()) > 1;
-  auto ld = (slash ? cwd() : homepath_ / ".jai") / file;
+  auto ld = (slash ? cwd() : homejaipath_) / file;
   if (auto [_it, ok] = config_loop_detect_.insert(ld); !ok)
     err<Options::Error>("configuration loop");
   Defer _clear{[this, ld = std::move(ld), drh = dir_relative_to_home_] {
@@ -198,6 +199,9 @@ GECOS field is not "{}")",
            kUntrustedUser, kUntrustedGecos);
   }
 
+  const char *jcd = getenv("JAI_CONFIG_DIR");
+  homejaipath_ = homejaipath_ / (jcd ? jcd : ".jai");
+
   // Paranoia about ptrace, because we will drop privileges to access
   // the file system as the user.
   if (prctl(PR_SET_DUMPABLE, 0) == -1)
@@ -239,7 +243,7 @@ int
 Config::home_jai()
 {
   if (!home_jai_fd_)
-    home_jai_fd_ = ensure_udir(home(), ".jai");
+    home_jai_fd_ = ensure_udir(home(), homejaipath_);
   return *home_jai_fd_;
 }
 
@@ -924,7 +928,7 @@ do_main(int argc, char **argv)
   // Override inline conf to make CLI idempotent
   (*opts)(
       "-C", "--conf", [&](path p) { opt_C = p; },
-      R"(Use FILE as configuration file (relative to ~/.jai)
+      R"(Use FILE as configuration file (relative to JAI_CONFIG_DIR or ~/.jai)
 default: CMD.conf or default.conf if CMD.conf does not exist)",
       "FILE");
   (*opts)("--help", [] { usage(0); });
