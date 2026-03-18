@@ -463,8 +463,8 @@ Config::make_mnt_ns()
     if (!grant_directories_.contains(cwd())) {
       if (cwd() == homepath_) {
         std::string name = prog.filename().string();
-        std::println(
-            R"({0}: Refusing to expose your entire home directory to sandbox.  Did
+        warn(
+            R"(Refusing to expose your entire home directory to sandbox.  Did
 {1:>{2}}  you forget to specify the -D option?  If you really want to grant
 {1:>{2}}  permissions on your entire home directory, use both -D and -d, as in
 {1:>{2}}    {0} -Dd {3} ...)",
@@ -639,37 +639,40 @@ Config::sanitize_env()
     unsetenv(v.c_str());
 }
 
-[[noreturn]] static void
-emulate_child(int pid, bool immediate)
+// Exits if child exited, returns stop signal if it stopped, 0 in EINTR
+static int
+propagate_exit(int pid, bool immediate)
 try {
-  for (;;) {
-    int status;
-    int r = waitpid(pid, &status, WUNTRACED);
-    std::println(stderr, "waitpid: pid {}, status 0x{:x}", pid, status);
-    fflush(stderr);
-    if (r != pid) {
-      if (r == -1 && errno != EINTR)
-        syserr("waitpid");
-      continue;
-    }
-    if (WIFSTOPPED(status)) {
-      if (int sig = WSTOPSIG(status); sig == SIGSTOP || sig == SIGTSTP ||
-                                      sig == SIGTTIN || sig == SIGTTOU) {
-        std::println(stderr, "attempting to stop myself with signal {}", sig);
-        raise(SIGSTOP);
-      }
-      continue;
-    }
-    // unmount();
-    if (WIFEXITED(status))
-      (immediate ? _exit : exit)(WEXITSTATUS(status));
-    if (WIFSIGNALED(status)) {
-      signal(WTERMSIG(status), SIG_DFL);
-      raise(WTERMSIG(status));
-      _exit(-1);
-    }
-    err("unknown child wait status 0x{:x}", status);
+  assert(pid > 0);
+  int status;
+again:
+  if (auto r = waitpid(-1, &status, WUNTRACED); r == -1) {
+    if (errno == EINTR)
+      goto again;
+    syserr("waitpid");
   }
+  else if (r != pid)
+    // PID 1 in the jail may need to reap reparented processes
+    goto again;
+
+  if (WIFSTOPPED(status)) {
+    if (int sig = WSTOPSIG(status);
+        sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU)
+      return sig;
+    // Unlikely to reach here, but maybe another process attached to
+    // our child with the debugger and it got SIGTRAP or something?
+    goto again;
+  }
+
+  // unmount();
+  if (WIFEXITED(status))
+    (immediate ? _exit : exit)(WEXITSTATUS(status));
+  if (WIFSIGNALED(status)) {
+    signal(WTERMSIG(status), SIG_DFL);
+    raise(WTERMSIG(status));
+    _exit(-1);
+  }
+  err("unknown child wait status 0x{:x}", status);
 } catch (const std::exception &e) {
   warn("{}", e.what());
   immediate ? _exit(1) : exit(1);
@@ -678,14 +681,32 @@ try {
 void
 Config::exec(int nsfd, char **argv)
 {
-  if (unshare(CLONE_NEWPID | CLONE_NEWIPC))
-    syserr("unshare(CLONE_NEWPID)");
+  // This function is a bit annoying because the existing jai process
+  // cannot move to a new PID namespace, so we have to fork once.  But
+  // the forked process will have PID 1 and behave strangely (such as
+  // not receiving signals), so needs to fork again to run the actual
+  // jailed program.  Then PID1 has to propagate exit and stop events
+  // to the outer parent, which must propagate it to the process than
+  // ran jai.
+  //
+  // Further complicating matters, PID 1 cannot stop itself (since it
+  // cannot receive a SIGSTOP from within the PID namespace).  Hence,
+  // if the jailed program stops, it uses a pipe to request that the
+  // original jai process stop it (from outside the PID namespace).
+  auto stop_me = xpipe();
 
-  if (auto pid = xfork()) {
+  if (auto pid = xfork(CLONE_NEWPID | CLONE_NEWIPC)) {
     // This is the last process in the old PID namespace
     close(nsfd);
-    emulate_child(pid, false);
+    stop_me[1].reset();
+    for (;;) {
+      char garbage[64];
+      if (read(*stop_me[0], garbage, sizeof(garbage)) > 0)
+        kill(pid, SIGSTOP);
+      raise(propagate_exit(pid, false));
+    }
   }
+  stop_me[0].reset();
 
   if (auto pid = xfork()) {
     // This is the "init" process in the new PID namespace
@@ -695,8 +716,17 @@ Config::exec(int nsfd, char **argv)
       _exit(1);
     }
     prctl(PR_SET_NAME, "jai-init");
-    emulate_child(pid, true);
+
+    static pid_t main_child_pid;
+    main_child_pid = pid;
+    signal(SIGCONT, +[](int sig) { kill(main_child_pid, sig); });
+
+    for (;;) {
+      propagate_exit(pid, true);
+      write(*stop_me[1], "", 1);
+    }
   }
+  stop_me[1].reset();
 
   try {
     xsetns(nsfd, CLONE_NEWNS);
@@ -855,7 +885,7 @@ default: CMD.conf or default.conf if CMD.conf does not exist)",
   try {
     cmd.assign_range(opts->parse_argv(argc, argv));
   } catch (Options::Error &e) {
-    std::println("{}", e.what());
+    warn("{}", e.what());
     usage(2);
   }
   if (!conf.mask_files_.empty())
@@ -863,7 +893,7 @@ default: CMD.conf or default.conf if CMD.conf does not exist)",
 
   if (opt_u) {
     if (!conf.grant_cwd_ || !conf.grant_directories_.empty() || !cmd.empty()) {
-      std::println("-u is not compatible with -d, -D, or a command");
+      std::println(stderr, "-u is not compatible with -d, -D, or a command");
       usage(2);
     }
     restore.reset();
