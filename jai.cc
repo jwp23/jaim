@@ -1061,7 +1061,7 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   }
 
   ensure_file(conf.home_jai(), ".defaults", jai_defaults, 0600);
-  ensure_file(conf.home_jai(), "default.conf", jai_defaults, 0600);
+  ensure_file(conf.home_jai(), "default.conf", default_conf, 0600);
 
   if (!opt_C.empty()) {
     if (!conf.parse_config_file(opt_C))

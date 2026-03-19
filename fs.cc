@@ -453,7 +453,8 @@ ensure_file(int dfd, path file, std::string_view contents, int mode)
     unlinkat(dfd, tmp.c_str(), 0);
     Defer cleanup{[dfd, &tmp] { unlinkat(dfd, tmp.c_str(), 0); }};
 
-    Fd fd = xopenat(dfd, tmp.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC);
+    Fd fd = xopenat(dfd, tmp.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC,
+                    mode);
     for (size_t i = 0; i < contents.size();) {
       if (auto n = write(*fd, contents.data() + i, contents.size() - i); n < 0)
         syserr(R"(write(O_TMPFILE for "{}"))", fdpath(dfd, file));
