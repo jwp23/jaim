@@ -255,10 +255,23 @@ Config::home_jai()
 int
 Config::storage()
 {
+  if (storage_fd_)
+    return *storage_fd_;
+
+  auto restore = asuser();
+
   if (storagedir_.empty())
-    return home_jai();
-  if (!storage_fd_)
+    storage_fd_ = xdup(home_jai());
+  else
     storage_fd_ = ensure_udir(AT_FDCWD, storagedir_);
+
+  path fullpath = fdpath(*storage_fd_, true);
+  if (fullpath.is_relative())
+    err("cannot find full pathname for {}", storagedir_.string());
+  if (!is_fd_at_path(*storage_fd_, -1, fullpath))
+    err("{} is no longer at {}", storagedir_.string(), fullpath.string());
+  storagedir_ = fullpath;
+
   return *storage_fd_;
 }
 
@@ -571,6 +584,28 @@ Config::make_mnt_ns()
     check_user(*dst, d, true);
     restore_root.reset();
     xmnt_move(*src, *dst);
+  }
+
+  xsetns(*newns, CLONE_NEWNS);
+  struct stat sb;
+
+  if (!storagedir_.empty() && stat(storagedir_.c_str(), &sb) == 0 &&
+      S_ISDIR(sb.st_mode)) {
+    // make sure storage directory not exposed
+    auto restore_root = asuser();
+    Fd target = xopenat(AT_FDCWD, storagedir_.c_str(), O_DIRECTORY | O_RDONLY);
+    check_user(*target);
+    restore_root.reset();
+    Fd empty = xopenat(-1, kRunRoot, O_RDONLY);
+    if (!is_dir_empty(*empty))
+      err("{} should be empty in jail", kRunRoot);
+    Fd source = clone_tree(*empty);
+    xmnt_setattr(*source, mount_attr{
+                             .attr_set = MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID |
+                                         MOUNT_ATTR_NODEV,
+                             .propagation = MS_PRIVATE,
+                         });
+    xmnt_move(*source, *target);
   }
 
   return newns;

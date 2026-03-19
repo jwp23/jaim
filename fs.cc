@@ -30,8 +30,11 @@ glob(std::string_view pattern, std::string_view target)
 std::string
 fdpath(int fd, bool must)
 {
-  if (fd < 0 || fd == AT_FDCWD)
+  if (fd < 0 || fd == AT_FDCWD) {
+    if (must)
+      err("fdpath invalid fd {}", fd);
     return ".";
+  }
   auto procfd = std::format("/proc/self/fd/{}", fd);
   std::error_code ec;
   auto res = std::filesystem::read_symlink(procfd, ec);
@@ -42,24 +45,21 @@ fdpath(int fd, bool must)
     }
     res = std::format("fd {} [can't determine path]", fd, ec.message());
   }
+  else if (must && !res.is_absolute() || !is_fd_at_path(fd, -1, res))
+    err("{} not valid complete path for fd {}", res.string(), fd);
   return res;
 }
 
 std::string
-fdpath(int fd, const path &file, bool must)
+fdpath(int fd, const path &file)
 {
   if (fd < 0 || fd == AT_FDCWD || file.is_absolute())
     return file.empty() ? "." : file.string();
   auto procfd = std::format("/proc/self/fd/{}", fd);
   std::error_code ec;
   auto res = std::filesystem::read_symlink(procfd, ec);
-  if (ec) {
-    if (must) {
-      errno = ec.value();
-      syserr("{}", procfd);
-    }
-    res = std::format("fd {} [can't determine path]", fd, ec.message());
-  }
+  if (ec)
+    res = std::format("fd {} [can't determine path]: {}", fd, ec.message());
   if (!file.empty())
     res = res / file;
   return res;

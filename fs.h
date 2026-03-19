@@ -68,7 +68,7 @@ subtree_rev(const is_one_of<PathSet, PathMultiset> auto &s, const path &root)
   return subtree(s, root) | std::views::reverse;
 }
 
-std::string fdpath(int fd, const path &file, bool must = false);
+std::string fdpath(int fd, const path &file);
 std::string fdpath(int fd, bool must = false);
 
 PathMultiset mountpoints(const path &mountinfo = "/proc/self/mountinfo");
