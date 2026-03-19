@@ -449,22 +449,23 @@ ensure_file(int dfd, path file, std::string_view contents, int mode)
     if (errno != ENOENT)
       syserr("{}", fdpath(dfd, file));
 
-    auto pp = file.parent_path();
-    if (pp.empty())
-      pp = ".";
-    Fd fd = xopenat(dfd, pp, O_TMPFILE | O_RDWR | O_CLOEXEC);
+    path tmp = cat(file, std::format("~{}~", getpid()));
+    unlinkat(dfd, tmp.c_str(), 0);
+    Defer cleanup{[dfd, &tmp] { unlinkat(dfd, tmp.c_str(), 0); }};
+
+    Fd fd = xopenat(dfd, tmp.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC);
     for (size_t i = 0; i < contents.size();) {
       if (auto n = write(*fd, contents.data() + i, contents.size() - i); n < 0)
         syserr(R"(write(O_TMPFILE for "{}"))", fdpath(dfd, file));
       else
         i += n;
     }
-
-    if (linkat(*fd, "", dfd, file.c_str(), AT_EMPTY_PATH) == 0)
-      return fd;
-    if (errno != EEXIST)
-      syserr(R"(linkat(O_TMPFILE -> "{}"))", fdpath(dfd, file));
-    if (!S_ISREG(xfstat(dfd, file).st_mode))
-      err("{}: not a regular file", fdpath(dfd, file));
+    if (fsync(*fd))
+      syserr("fsync(\"{}\")", fdpath(*fd));
+    if (renameat(dfd, tmp.c_str(), dfd, file.c_str()))
+      syserr(R"(rename("{}" -> "{}") in "{}")", tmp.string(), file.string(),
+             fdpath(*fd));
+    cleanup.release();
+    return fd;
   }
 }
