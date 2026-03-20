@@ -136,13 +136,15 @@ already on your path:
 
     PATH=$HOME/.local/bin:$PATH jai -n claude claude
 
-To make `jai claude` use the claude sandbox by default:
+To make `jai claude` use the claude jail by default:
 
     cat <<<EOF >$HOME/.jai/claude.conf
     conf .defaults
     name claude
+
     # Mode already defaults to strict; change to bare if using NFS
     mode strict
+
     command PATH=$HOME/.local/bin:$PATH "$0" "$@"
     EOF
 
@@ -159,8 +161,11 @@ opencode`):
 
     cat <<EOF >$HOME/.jai
     conf .defaults
-    # leave default sandbox
     mode casual
+
+    # no need to specify name, will be "default" by default
+    # name default
+
     # list additional directories to expose
     dir .codex
     EOF
@@ -185,8 +190,8 @@ opencode`):
   command-line options always take precedence over configuration
   files.  When `conf` is specified in a configuration file, however,
   the behavior is different.  The specified file is read at the exact
-  point of the `conf` directive, so overriding previous lines and
-  getting overridden by subsequent lines.
+  point of the `conf` directive, overriding previous lines and subject
+  to being reversed by subsequent lines.
 
 `-d` *dir*, `--dir` *dir*
 : Grant full access to directory *dir* and everything below in the
@@ -217,7 +222,7 @@ opencode`):
   different user id, `jai`.  Id-mapped mounts are used to map `jai` to
   the invoking user in granted directories.  Strict mode is the
   default when you name a jail (see `--name`), but not for the default
-  sandbox.
+  jail.
 
     Bare mode uses an empty directory like strict mode, but runs with
   the invoking user's credentials.  It is inferior to strict mode, but
@@ -225,17 +230,17 @@ opencode`):
   support id-mapped mounts.
 
 `-n` *name*, `--name` *name*
-: jai allows you to have multiple sandboxed home directories, which
-  may be useful when sandboxing multiple tools that should not have
-  access to each other's API keys.  This option specifies which home
-  directory to use.  If no such sandbox exists yet, it will be created
-  on demand.  When not specified, the default is just `default`.  Note
-  that each name can be associated with both a casual home directory
-  (accessible at `/run/jai/$USER/`*name*`.home`, with changes in
+: jai allows you to have multiple jailed home directories, which may
+  be useful when jailing multiple tools that should not have access to
+  each other's API keys.  This option specifies which home directory
+  to use.  If no such jail exists yet, it will be created on demand.
+  When not specified, the default is just `default`.  Note that each
+  name can be associated with both a casual home directory (accessible
+  at `/run/jai/$USER/`*name*`.home`, with changes in
   `$HOME/.jai/`*name*`.changes`) and a strict/bare home directory (in
   `$HOME/.jai/`*name*`.home`).  There is no special relation between
-  these home directories, but casual and strict sandboxes by the same
-  name do share the same `/tmp` directory.
+  these home directories, but casual and strict jails by the same name
+  do share the same `/tmp` directory.
 
 `--mask` *file*
 : When creating an overlay home directory, create a "whiteout" file to
@@ -258,18 +263,18 @@ opencode`):
   surgically remove individual masked files that you want to expose.
 
 `--unsetenv` *var*
-: Filters *var* from the environment of the sandboxed program.  Can be
-  the simple name of an environment variable, or can use the wildcard
-  `*` as in `*_PID`.  (Since sandboxed processes don't see outside
-  processes, you might as well filter any PIDs exposed in environment
-  variables to avoid confusion.)
+: Filters *var* from the environment of the jailed program.  Can be
+  the name of an environment variable, or can use the wildcard `*` as
+  in `*_PID`.  (Since jailed processes don't see outside processes,
+  you might as well filter any PIDs exposed in environment variables
+  to avoid confusion.)
 
 `--setenv` *var*, `--setenv` *var*`=`*value*
 : There are two forms of this command.  If the argument does not
   contain `=`, then `--setenv` reverses the effect of `--unsetenv`
   *var*.  If *var* is a pattern, it must exactly match the unset
   pattern you want to remove.  For example, `--unsetenv=*_PASSWORD
-  --setenv=IPMI_PASSWORD` and `--unsetenv=*_PASSWORD
+  --setenv=IPMI_PASSWORD` and `--unsetenv=IPMI_PASSWORD
   --setenv=IPMI_PASSWORD` will both pass the `IPMI_PASSWORD`
   environment variable through to the jail, while
   `--unsetenv=*_PASSWORD --setenv=IPMI_*` will not.
@@ -279,19 +284,17 @@ opencode`):
 
 `--storage` *dir*
 : Specify an alternate location in which to store private home
-  directories and overlays.  The default is $JAI_CONFIG_DIR or
-  $HOME/.jai, but if your home directory is on NFS you may wish to use
-  storage on a local file system, as NFS does not support the extended
-  attributes required by overlay file systems and does not support
-  id-mapped mounts.
+  directories and overlays.  The default is `$JAI_CONFIG_DIR` if set,
+  otherwise `$HOME/.jai`.  However, if your home directory is on NFS
+  you may wish to use storage on a local file system, as NFS does not
+  support the extended attributes required by overlay file systems.
 
 `--command` *bash-command*
-: jai launches the sandboxed program you specify by running
-  "`/bin/bash -c` *bash-command* *cmd* *arg*...".  By default,
-  *bash-command* just runs the program as `"$0" "$@"`, but in
-  configuration files for particular programs, you can use
-  *bash-command* to set environment variables or add additional
-  command-line options.
+: jai launches the jailed program you specify by running "`/bin/bash
+  -c` *bash-command* *cmd* *arg*...".  By default, *bash-command* just
+  runs the program as `"$0" "$@"`, but in configuration files for
+  particular programs, you can use *bash-command* to set environment
+  variables or add additional command-line options.
 
 `-u`
 : Unmounts all overlay directories from `/run/jai` and cleans up
@@ -300,16 +303,20 @@ opencode`):
   private `/tmp` and `/var/tmp` directories (same directory at both
   mount points), so make sure you don't need anything in there.
 
-  Many configuration choices apply only when a sandbox is first
-  created, so you must run `jai -u` to change them.  In particular,
-  you must use this option if you have added new files to be masked,
-  as masking only takes effect at the time an overlay home is created.
+  Overlay mounts for casual jails are created under
+  `/run/jai/$USER/*.home` and left around between invocations of jai.
+  If you wish to change "upper" directories `$HOME/.jai/*.changes`,
+  the changes may not take effect until the file system is unmounted
+  and remounted.  For that reason, `--mask` options are only applied
+  when first creating the overlay mount.  Hence, you must run `jai -u`
+  before changing `--mask` options or directly editing the changes
+  directory.
 
 `--print-defaults`
 : Prints the default contents for `$HOME/.jai/.defaults`.
 
 `--version`
-: Prints the version number and copyright.
+: Prints the version number and copyright and exit.
 
 # ENVIRONMENT
 
@@ -352,26 +359,27 @@ setting the `JAI_CONFIG_DIR` environment variable.
 
 `$HOME/.jai/default.changes`, `$HOME/.jai/`*name*`.changes`
 : This "upper" directory is overlaid on your home directory and
-  contains changes that have been made inside a casual jail.  If you
-  make changes in this directory, you may need to tear down and
-  recreate the sandboxed home directory with `jai -u`.  The
-  non-default version is used when you specify `-n` *name* on the
-  command line.  If you specified `--storage=`*dir*, the changes
-  directory will be in *dir* instead of `$HOME/.jai`.
+  contains changes that have been made inside a casual jail.  Before
+  directly changing this directory, tear down and recreate the
+  sandboxed home directory with `jai -u`.  The non-default version is
+  used when you specify `-n` *name* on the command line.  If you
+  specified `--storage=`*dir*, the changes directory will be in *dir*
+  instead of `$HOME/.jai`.
 
 `$HOME/.jai/default.work`, `$HOME/.jai/`*name*`.work`
 : This "work" directory is required by overlayfs, but does not contain
   anything user-accessible.  Every once in a while the overlay file
   system may create files in here that you cannot delete.  If you are
-  trying to blow away an overlay directory to start from scratch and
-  cannot delete this directory, try running `jay -u` which will clean
+  trying to delete an overlay directory to start from scratch and
+  cannot delete this directory, try running `jay -u`, which will clean
   things up.  If you specified `--storage=`*dir*, or used a symbolic
   link for your changes directory, then the work directory will always
   be next to the changes directory wherever that lives.
 
 `$HOME/.jai/default.home`, `$HOME/.jai/`*name*`.home`
 : Private home directory for bare and strict jails.  If you specified
-  `--storage=`*dir*, the these directories will be in *dir* instead.
+  `--storage=`*dir*, the these directories will be under *dir* instead
+  of `$HOME/.jai`.
 
 `/run/jai/$USER/default.home`, `/run/jai/$USER/`*name*`.home`
 : Home directories for casual jails.  You can delete files with
@@ -391,9 +399,9 @@ occasionally they contain files, in which case it requires root
 privileges to delete the directories.  You can run `jai -u` to clean
 these up if you are unable to delete them.
 
-In general overlayfs can be flaky.  If the attributes on the
-`default.changes` directory get out of sync, it may require making a
-new `default.changes` directory to get around mounting errors.
+Overlayfs can be flaky.  If the attributes on the `default.changes`
+directory get out of sync, it may require making a new
+`default.changes` directory to get around mounting errors.
 
 # SEE ALSO
 

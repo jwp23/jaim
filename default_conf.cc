@@ -80,9 +80,10 @@ mask .config/kube
 mask .docker
 mask .password-store
 mask .mozilla
+mask .config/BraveSoftware
 mask .config/chromium
 mask .config/google-chrome
-mask .config/BraveSoftware
+mask .config/mozilla-chrome
 mask .bash_history
 mask .zsh_history
 

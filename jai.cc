@@ -1017,11 +1017,13 @@ usage(int status)
 version()
 {
   std::println(R"({}
+{}
+
 Copyright (C) 2026 David Mazieres
 This program comes with NO WARRANTY, to the extent permitted by law.
 You may redistribute it under the terms of the GNU General Public License
 version 3 or later; see the file named COPYING for details.)",
-               PACKAGE_STRING);
+               PACKAGE_STRING, PACKAGE_URL);
   exit(0);
 }
 
