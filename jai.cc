@@ -778,6 +778,7 @@ try {
 void
 Config::pid2(char **argv)
 try {
+  fix_proc();
   if (mode_ == kCasual || mode_ == kBare)
     user_cred_.make_real();
   else
@@ -855,7 +856,6 @@ Config::exec(int nsfd, char **argv)
 
   pid1(std::move(stop_me[1]));
   xsetns(nsfd, CLONE_NEWNS);
-  fix_proc();
   pid2(argv);
 }
 
