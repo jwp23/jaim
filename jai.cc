@@ -338,6 +338,7 @@ Config::make_private_tmp()
 Fd
 Config::make_private_run()
 {
+  ensure_dir(run_jai_user(), "tmp/.run", 0755, kNoFollow);
   Fd fd = ensure_dir(run_jai_user(), "tmp/.run" / sandbox_name_, 0700,
                      kNoFollow, true);
   if (xfstat(*fd).st_uid != user_cred_.uid_ &&
@@ -1049,7 +1050,8 @@ Config::opt_parser(bool dotjail)
       },
       "Erase $HOME/FILE when first creating overlay home", "FILE");
   opts(
-      "--unmask", [this](std::string_view arg) {
+      "--unmask",
+      [this](std::string_view arg) {
         path p(expand(arg));
         mask_files_.erase(p);
       },
