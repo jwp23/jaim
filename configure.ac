@@ -44,6 +44,14 @@ AC_SUBST([UNTRUSTED_USER])
 AC_DEFINE_UNQUOTED([UNTRUSTED_USER], ["$UNTRUSTED_USER"],
   [Username for the sandboxed untrusted user])
 
+AC_MSG_CHECKING(For systemd version)
+[systemd_version="$(systemd-sysusers --version | \
+                 sed -ne '1s/[^0-9]*\([0-9][0-9]*\).*/\1/p')"]
+AC_MSG_RESULT($systemd_version)
+
+AS_IF([test "$systemd_version" -ge 257], [SYSUSER_U=u!], [SYSUSER_U=u])
+AC_SUBST([SYSUSER_U])
+
 TEST_ABS_TOP_BUILDDIR=`pwd -P`
 TEST_ABS_TOP_SRCDIR=`cd "$srcdir" && pwd -P`
 AC_SUBST([TEST_ABS_TOP_BUILDDIR])

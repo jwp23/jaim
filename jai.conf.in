@@ -1,2 +1,2 @@
 # Copy this file to $PREFIX/lib/sysusers.d/
-u!	@UNTRUSTED_USER@	-	"JAI sandbox untrusted user"
+@SYSUSER_U@	@UNTRUSTED_USER@	-	"JAI sandbox untrusted user"
