@@ -1,22 +1,23 @@
 
-This software only runs on modern versions of linux, starting with
-linux 6.13.  It makes extensive use of non-portable
-file-descriptor-based mount calls and file system namespace
-facilities.
+To build and use jai, you will need the following:
 
-To get the software, run:
+ - A modern C++ compiler (tested with gcc 15 and clang 22)
 
-    git clone github.com:stanford-scs/jai.git
-    cd jai
+ - A modern version of Linux (kernel 6.13 and later should work)
 
-To build from git, you will need autoconf and automake:
+ - libmount (possible distro package names: util-linux-libs, libmount-dev)
 
-    ./autogen.sh
+ - libacl (possible distro package names: acl, libacl1-dev)
+
+To build from building from a release tarball, run:
+
     ./configure
     make
 
-If building from a release tarball, autotools are not required:
+To build from a git checkout, you will need autoconf, automake, and
+pandoc (to format the man page).  Run:
 
+    ./autogen.sh
     ./configure
     make
 
