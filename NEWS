@@ -1,6 +1,9 @@
 
 * Changes in jai 0.3
 
+Removed dependencies on libmount, acl, and pkg-config to make it
+easier to compile.
+
 Added the -r, --rdir, and --rdir? options.
 
 jai now compiles with clang libc++ (despite the lack of

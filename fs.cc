@@ -1,14 +1,17 @@
 #include "fs.h"
 #include "defer.h"
 
+#include <bit>
 #include <cassert>
 #include <cstring>
 #include <filesystem>
 
+#include <linux/posix_acl_xattr.h>
 #include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/xattr.h>
 
 bool
 glob(std::string_view pattern, std::string_view target)
@@ -396,26 +399,6 @@ open_flags_to_string(int flags)
   return result;
 }
 
-void
-set_fd_acl(int fd, const char *acltext, AclType which)
-{
-  ACL acl = acl_from_text(acltext);
-  if (!acl)
-    syserr(R"(acl_from_text("{}"))", acltext);
-  if (acl_valid(acl) != 0)
-    syserr(R"(acl_validate("{}"))", acltext);
-
-  if (which == kAclAccess) {
-    if (acl_set_fd(fd, acl))
-      syserr(R"(acl_set_fd("{}", {}))", fdpath(fd), acltext);
-    return;
-  }
-
-  auto procfd = std::format("/proc/self/fd/{}", fd);
-  if (acl_set_file(procfd.c_str(), ACL_TYPE_DEFAULT, acl))
-    syserr(R"(acl_set_file("{}", DEFAULT, {}))", fdpath(fd), acltext);
-}
-
 std::string
 read_fd(int fd)
 {
@@ -490,3 +473,168 @@ ensure_file(int dfd, path file, std::string_view contents, int mode,
   createcb(*fd);
   return fd;
 }
+
+std::optional<XattrVal>
+xfgetxattr(int fd, const char *attrname, size_t initial_size)
+{
+  auto ret = std::optional(XattrVal{});
+  ret->resize(initial_size);
+  for (;;) {
+    auto n = fgetxattr(fd, attrname, ret->data(), ret->size());
+    if (n < 0) {
+      if (errno == ENODATA) {
+        ret.reset();
+        return ret;
+      }
+      if (errno != ERANGE || ret->empty())
+        syserr(R"({}: fgetxattr("{}"))", fdpath(fd), attrname);
+      ret->clear(); // will retrieve the size next time
+    }
+    else if (n > ret->size())
+      ret->resize(n);
+    else {
+      ret->resize(n);
+      return ret;
+    }
+  }
+}
+
+void
+xfsetxattr(int fd, const char *attrname, std::span<const std::byte> val,
+           int flags)
+{
+  if (fsetxattr(fd, attrname, val.data(), val.size(), flags))
+    syserr(R"({}: fsetxattr("{}"))", fdpath(fd), attrname);
+}
+
+namespace acl {
+
+template<typename T> requires std::is_standard_layout_v<T>
+inline void
+pushbytes(XattrVal &v, const T &t)
+{
+  auto p = reinterpret_cast<const std::byte *>(&t);
+  v.insert(v.end(), p, p + sizeof(t));
+}
+
+inline auto
+loadle(std::integral auto i)
+{
+  if constexpr (std::endian::native != std::endian::little)
+    return std::byteswap(i);
+  else
+    return i;
+}
+
+template<std::integral I>
+inline void
+storele(I &dst, std::integral auto src)
+{
+  dst = loadle(I(src));
+}
+
+XattrVal
+serialize(const ACL &a)
+{
+  std::vector<std::byte> ret;
+
+  posix_acl_xattr_header h{};
+  storele(h.a_version, POSIX_ACL_XATTR_VERSION);
+  pushbytes(ret, h);
+
+  for (const auto &e : a) {
+    posix_acl_xattr_entry le{};
+    storele(le.e_tag, e.tag);
+    storele(le.e_perm, e.perm);
+    storele(le.e_id, e.id);
+    pushbytes(ret, le);
+  }
+
+  return ret;
+}
+
+ACL
+deserialize(const XattrVal &raw)
+{
+  if (raw.size() < sizeof(posix_acl_xattr_header) ||
+      (raw.size() - sizeof(posix_acl_xattr_header)) %
+          sizeof(posix_acl_xattr_entry))
+    err("acl::deseriralize: invalid size {} bytes", raw.size());
+
+  auto *h = reinterpret_cast<const posix_acl_xattr_header *>(raw.data());
+  if (auto v = loadle(h->a_version); v != POSIX_ACL_XATTR_VERSION)
+    err("acl::deseriralize: invalid version {}", v);
+
+  size_t nentries = (raw.size() - sizeof(posix_acl_xattr_header)) /
+                    sizeof(posix_acl_xattr_entry);
+  std::span<const posix_acl_xattr_entry> rawentries(
+      reinterpret_cast<const posix_acl_xattr_entry *>(
+          raw.data() + sizeof(posix_acl_xattr_header)),
+      nentries);
+
+  ACL ret;
+  ret.reserve(nentries);
+  for (const auto &re : rawentries)
+    ret.emplace_back(loadle(re.e_tag), loadle(re.e_id), loadle(re.e_perm));
+  return ret;
+}
+
+std::optional<ACL>
+fdgetacl(int fd, AclName which)
+{
+  if (auto raw = xfgetxattr(fd, which.name))
+    return deserialize(*raw);
+  return std::nullopt;
+}
+
+void
+fdsetacl(int fd, const ACL &val, AclName which, int flags)
+{
+  auto raw = serialize(val);
+  if (fsetxattr(fd, which.name, raw.data(), raw.size(), flags))
+    syserr("{}: fdsetacl({}, {})", fdpath(fd), val, flags);
+}
+
+struct tagid {
+  uint16_t tag;
+  uint32_t id = ACL_UNDEFINED_ID;
+  tagid(uint16_t t) noexcept : tag(t) { assert(!Entry::has_id(tag)); }
+  tagid(const Entry &e) noexcept
+    : tag(e.tag), id(e.has_id() ? e.id : ACL_UNDEFINED_ID)
+  {}
+  friend auto operator<=>(const tagid &a, const tagid &b) noexcept = default;
+};
+
+ACL
+normalize(const ACL &a)
+{
+  uint16_t mask = 0;
+  std::map<tagid, size_t> idx;
+  ACL out;
+
+  for (size_t i = 0; i < a.size(); ++i) {
+    const auto &e = a[i];
+    if (e.tag != ACL_USER_OBJ)
+      mask |= e.perm;
+    if (auto it = idx.find(e); it != idx.end())
+      out[it->second] = e;
+    else {
+      idx[e] = out.size();
+      out.push_back(e);
+    }
+  }
+
+  if (auto id = ACL_USER_OBJ; !idx.contains(id))
+    out.emplace_back(id, mask);
+  if (auto id = ACL_GROUP_OBJ; !idx.contains(id))
+    out.emplace_back(id, 0);
+  if (auto id = ACL_OTHER; !idx.contains(id))
+    out.emplace_back(id, 0);
+  if (auto id = ACL_MASK; !idx.contains(id))
+    out.emplace_back(id, mask);
+
+  std::ranges::sort(out);
+  return out;
+}
+
+} // namespace acl

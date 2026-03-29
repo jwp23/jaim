@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <string>
@@ -16,7 +18,7 @@
 
 #include <dirent.h>
 #include <fcntl.h>
-#include <sys/acl.h>
+#include <linux/posix_acl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -322,10 +324,150 @@ Fd ensure_file(
     int dfd, path file, std::string_view contents, int mode = 0600,
     std::function<void(int)> createcb = [](int) {});
 
-using ACL = RaiiHelper<acl_free, acl_t>;
+using XattrVal = std::vector<std::byte>;
 
-enum AclType {
-  kAclAccess = ACL_TYPE_ACCESS,   // Set ACL on inode
-  kAclDefault = ACL_TYPE_DEFAULT, // Set ACL for files created in directory
+std::optional<XattrVal> xfgetxattr(int fd, const char *attrname,
+                                   size_t initial_size = 64);
+
+void xfsetxattr(int fd, const char *attrname, std::span<const std::byte> val,
+                int flags = 0);
+
+namespace acl {
+
+struct Perm {
+  uint16_t val{};
+  constexpr Perm(int v) : val(v) {}
+  consteval Perm(const char *s)
+  {
+    while (*s)
+      switch (*s++) {
+      case 'r':
+        val |= ACL_READ;
+        break;
+      case 'w':
+        val |= ACL_WRITE;
+        break;
+      case 'x':
+        val |= ACL_EXECUTE;
+        break;
+      case '-':
+        break;
+      default:
+        throw "invalid permission string";
+      }
+  }
 };
-void set_fd_acl(int fd, const char *acltext, AclType which = kAclAccess);
+
+struct Entry {
+  uint16_t tag;
+  uint16_t perm;
+  uint32_t id = ACL_UNDEFINED_ID;
+
+  constexpr Entry(uint16_t t, Perm p) noexcept : tag(t), perm(p.val) {}
+  constexpr Entry(uint16_t t, uint32_t i, Perm p) noexcept
+    : tag(t), perm(p.val), id(i)
+  {}
+
+  static constexpr char tag_char(uint16_t tag)
+  {
+    switch (tag) {
+    case ACL_USER_OBJ:
+    case ACL_USER:
+      return 'u';
+    case ACL_GROUP_OBJ:
+    case ACL_GROUP:
+      return 'g';
+    case ACL_MASK:
+      return 'm';
+    case ACL_OTHER:
+      return 'o';
+    default:
+      return 0;
+    }
+  }
+  char tag_char() const { return tag_char(tag); }
+
+  static constexpr bool has_id(uint16_t tag)
+  {
+    return tag == ACL_USER || tag == ACL_GROUP;
+  }
+  bool has_id() const { return has_id(tag); }
+
+  template<uint16_t Tag> requires (has_id(Tag))
+  static Entry make(uint32_t i, Perm p)
+  {
+    return {Tag, i, p};
+  }
+  template<uint16_t Tag> requires (!has_id(Tag))
+  static Entry make(Perm p)
+  {
+    return {Tag, p};
+  }
+
+  friend auto operator<=>(const Entry &, const Entry &) noexcept = default;
+};
+
+constexpr auto owner = Entry::make<ACL_USER_OBJ>;
+constexpr auto fgroup = Entry::make<ACL_GROUP_OBJ>; // "file group"
+constexpr auto other = Entry::make<ACL_OTHER>;
+constexpr auto uid = Entry::make<ACL_USER>;
+constexpr auto gid = Entry::make<ACL_GROUP>;
+constexpr auto mask = Entry::make<ACL_MASK>;
+
+using ACL = std::vector<Entry>;
+
+XattrVal serialize(const ACL &a);
+ACL deserialize(const XattrVal &raw);
+
+struct AclName {
+  const char *const name;
+  consteval explicit AclName(const char *n) : name(n) {}
+};
+// ACL on an inode
+constexpr AclName kAclAccess("system.posix_acl_access");
+// ACL for newly created files in a directory
+constexpr AclName kAclDefault("system.posix_acl_default");
+
+std::optional<ACL> fdgetacl(int fd, AclName which = kAclAccess);
+void fdsetacl(int fd, const ACL &val, AclName which = kAclAccess,
+              int flags = 0);
+
+// Remove duplicate entries (last one wins), make sure owner, fgroup,
+// other, and mask are present.
+ACL normalize(const ACL &a);
+
+} // namespace acl
+
+template<> struct std::formatter<acl::Entry> {
+  using entry_type = acl::Entry;
+  constexpr auto parse(auto &ctx) { return ctx.begin(); }
+  auto format(const entry_type &e, auto &ctx) const
+  {
+    auto out = ctx.out();
+    if (char c = e.tag_char())
+      out = std::format_to(out, "{}:", c);
+    else
+      out = std::format_to(out, "TAG#{}:", e.tag);
+    if (e.has_id())
+      out = std::format_to(out, "{}", e.id);
+    else if (e.id != ACL_UNDEFINED_ID)
+      out = std::format_to(out, "[{}]", e.id);
+    return std::format_to(out, ":{}{}{}", e.perm & ACL_READ ? 'r' : '-',
+                          e.perm & ACL_WRITE ? 'w' : '-',
+                          e.perm & ACL_EXECUTE ? 'x' : '-');
+  }
+};
+
+template<> struct std::formatter<acl::ACL> : std::formatter<std::string> {
+  using super = std::formatter<std::string>;
+  auto format(const acl::ACL &a, auto &ctx) const
+  {
+    std::string buf;
+    for (const auto &e : a) {
+      if (!buf.empty())
+        buf += ',';
+      buf += std::format("{}", e);
+    }
+    return std::format_to(ctx.out(), "{}", buf);
+  }
+};

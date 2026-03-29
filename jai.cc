@@ -8,7 +8,6 @@
 #include <linux/prctl.h>
 #include <print>
 
-#include <acl/libacl.h>
 #include <poll.h>
 #include <pwd.h>
 #include <ranges>
@@ -236,16 +235,12 @@ Config::run_jai_user()
     return *run_jai_user_fd_;
 
   Fd dirfd = ensure_dir(run_jai(), user_, 0750, kNoFollow);
-  RaiiHelper<acl_free, acl_t> acl = acl_get_fd(*dirfd);
-  if (!acl)
-    syserr("acl_get_fd");
-  if (int r = acl_equiv_mode(acl, nullptr); r < 0)
-    syserr("acl_equiv_mode");
-  else if (r == 0) {
-    auto text =
-        std::format("u::rwx,g::---,o::---,u:{}:r-x,m::r-x", user_cred_.uid_);
-    set_fd_acl(*dirfd, text.c_str(), kAclAccess);
-  }
+
+  using namespace acl;
+  ACL want = normalize({owner("rwx"), uid(user_cred_.uid_, "r-x")});
+  if (auto oa = fdgetacl(*dirfd); !oa || *oa != want)
+    fdsetacl(*dirfd, want);
+
   return *(run_jai_user_fd_ = std::move(dirfd));
 }
 
