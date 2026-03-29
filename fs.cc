@@ -560,13 +560,16 @@ struct unaligned {
     static_assert(sizeof(unaligned) == sizeof(T));
     return sizeof(T);
   }
-  T get() const
-  {
-    T ret;
-    memcpy(&ret, storage_, size());
-    return ret;
-  }
 };
+
+template<typename T>
+T
+get(const unaligned<T> *p)
+{
+  T ret;
+  memcpy(&ret, p, sizeof(T));
+  return ret;
+}
 
 ACL
 deserialize(const XattrVal &raw)
@@ -577,21 +580,21 @@ deserialize(const XattrVal &raw)
   if (raw.size() < Hdr::size() || ((raw.size() - Hdr::size()) % Ent::size()))
     err("acl::deseriralize: invalid size {} bytes", raw.size());
 
-  auto h = reinterpret_cast<const Hdr *>(raw.data())->get();
+  auto h = get(reinterpret_cast<const Hdr *>(raw.data()));
   if (auto v = loadle(h.a_version); v != POSIX_ACL_XATTR_VERSION)
     err("acl::deseriralize: invalid version {}", v);
 
   size_t nentries = (raw.size() - Hdr::size()) / Ent::size();
-
-  std::span<const Ent> rawentries(
-      reinterpret_cast<const Ent *>(raw.data() + Hdr::size()), nentries);
+  auto entries = reinterpret_cast<const Ent *>(raw.data() + Hdr::size());
 
   ACL ret;
   ret.reserve(nentries);
-  for (const auto re : rawentries | std::views::transform([](const Ent &ure) {
-                         return ure.get();
-                       }))
-    ret.emplace_back(loadle(re.e_tag), loadle(re.e_id), loadle(re.e_perm));
+  for (const Ent *ent = entries, *end = entries + nentries; ent < end; ++ent) {
+    posix_acl_xattr_entry re = get(ent);
+    auto tag = loadle(re.e_tag);
+    auto id = Entry::has_id(tag) ? loadle(re.e_id) : ACL_UNDEFINED_ID;
+    ret.emplace_back(tag, id, loadle(re.e_perm));
+  }
   return ret;
 }
 
