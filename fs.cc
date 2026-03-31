@@ -647,7 +647,8 @@ normalize(const ACL &a)
     amap.insert_or_assign(ACL_MASK, mask(bound));
   }
 
-  return ACL(std::from_range, amap | std::views::values);
+  auto vals = amap | std::views::values;
+  return ACL(vals.begin(), vals.end());
 }
 
 } // namespace acl
