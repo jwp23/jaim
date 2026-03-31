@@ -109,13 +109,16 @@ Config::complete(Completions c)
         cs.output("{} ", sv);
     }
   }
-  else if (std::ranges::contains(std::array{"-d", "--dir", "-x", "--xdir", "-r",
-                                            "--rdir", "--rdir?", "--storage"},
+  else if (std::ranges::contains(std::array{"-d", "--dir", "--dir!", "-x",
+                                            "--xdir", "-r", "--rdir", "--rdir?",
+                                            "--storage"},
                                  opt))
     complete_path(AT_FDCWD, cs, true);
+  else if (std::ranges::contains(std::array{"--script", "--script?"}, opt))
+    complete_path(AT_FDCWD, cs, false);
   else if (std::ranges::contains(std::array{"--mask", "--unmask"}, opt))
     complete_path(home(), cs, false);
-  else if (std::ranges::contains(std::array{"-C", "--conf"}, opt))
+  else if (std::ranges::contains(std::array{"-C", "--conf", "--conf?"}, opt))
     complete_config(home_jai(), cs, ".conf");
   else if (std::ranges::contains(std::array{"-j", "--jail"}, opt))
     complete_config(storage(), cs, ".jail");
