@@ -16,6 +16,8 @@ TESTS = \
 		modes.sh \
 		mask.sh \
 		process-state.sh \
+		script-optional.sh \
+		script.sh \
 		strict-home-grant.sh \
 		sudo-env.sh \
 		storage.sh \
