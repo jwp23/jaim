@@ -9,7 +9,7 @@ move_only_function.h options.h
 man1_MANS = jai.1
 
 jai.1: jai.1.md
-	-pandoc -s -w man jai.1.md -o jai.1
+	-pandoc -s -w man $(srcdir)/jai.1.md -o jai.1
 
 sysusersdir = $(prefix)/lib/sysusers.d
 sysusers_DATA = jai.conf
