@@ -126,6 +126,7 @@ GECOS field is not "{}")",
 
   const char *jcd = getenv("JAI_CONFIG_DIR");
   homejaipath_ = homepath_ / (jcd ? jcd : ".jai");
+  setenv("JAI_CONFIG_DIR", homejaipath_.c_str(), 1);
 
   // Paranoia about ptrace, because we will drop privileges to access
   // the file system as the user.
@@ -283,6 +284,39 @@ Config::make_blacklist(int dfd, path name)
   return blacklistfd;
 }
 
+void
+Config::init_jail(int newhomefd)
+{
+  if (access(jailinit_.c_str(), X_OK))
+    syserr("{}", jailinit_.string());
+  if (auto pid = xfork()) {
+    int status;
+    while (waitpid(pid, &status, 0) == -1)
+      if (errno != EINTR)
+        syserr("jailinit waitpid");
+    if (WIFEXITED(status)) {
+      if (auto val = WEXITSTATUS(status))
+        warn("{}: exit code {}{}", jailinit_.string(), val,
+             val == 199 ? " (probably couldn't execute)" : "");
+    }
+    else if (WIFSIGNALED(status))
+      warn("{}: killed by signal {}", jailinit_.string(), WTERMSIG(status));
+    return;
+  }
+
+  try {
+    if (fchdir(newhomefd))
+      syserr("{}", fdpath(newhomefd));
+    user_cred_.make_real();
+    umask(old_umask_);
+    execl(jailinit_.c_str(), jailinit_.c_str(), nullptr);
+    syserr("{}", jailinit_.string());
+  } catch (const std::exception &e) {
+    warn("{}", e.what());
+    _exit(199);
+  }
+}
+
 Fd
 Config::make_home_overlay()
 {
@@ -317,7 +351,10 @@ Config::make_home_overlay()
 
   xmnt_move(*mnt, *sandboxed_home);
   restore = asuser();
-  return xopenat(run_jai_user(), sb, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+  sandboxed_home =
+      xopenat(run_jai_user(), sb, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+  init_jail(*sandboxed_home);
+  return sandboxed_home;
 }
 
 Fd
@@ -525,7 +562,8 @@ Config::make_mnt_ns()
       attr.attr_set |= MOUNT_ATTR_IDMAP;
       attr.userns_fd = *mapns;
     }
-    home = clone_tree(*ensure_udir(storage(), cat(sandbox_name_, ".home")));
+    home = clone_tree(*ensure_udir(storage(), cat(sandbox_name_, ".home"), 0700,
+                                   kFollow, [this](int fd) { init_jail(fd); }));
   }
   for (int dfd : {*tmp, *home, *passwd, *rundir, *shmdir})
     if (dfd != -1)
@@ -1097,8 +1135,6 @@ Config::pid2(char **argv)
     argv = const_cast<char **>(bashcmd.data());
   }
 
-  setenv("JAI_JAIL", sandbox_name_.c_str(), 1);
-  setenv("JAI_MODE", std::format("{}", mode_).c_str(), 1);
   auto env = make_env();
 
   execvpe(argv0, argv, const_cast<char **>(env.data()));
@@ -1143,7 +1179,7 @@ Config::opt_parser(bool dotjail)
             weakly_canonical(parsing_config_file_ ? homepath_ / d : d),
             kGrantMkdir);
       },
-      "like --dir, but create DIR if it doesn't exist", "DIR");
+      "Like --dir, but create DIR if it doesn't exist", "DIR");
   opts(
       "-r", "--rdir",
       [this](std::string_view arg) {
@@ -1214,6 +1250,31 @@ Config::opt_parser(bool dotjail)
         }
       },
       "Like --script but don't fail if SCRIPT does not exist", "SCRIPT");
+  opts(
+      "--initjail",
+      [this](path arg) {
+        jailinit_ = canonical(parsing_config_file_ ? homejaipath_ / arg : arg);
+        if (access(jailinit_.c_str(), X_OK))
+          err<Options::Error>("{}: {}", jailinit_.string(),
+                              errno == EACCES ? "no execute permission"
+                                              : strerror(errno));
+      },
+      "Run unjailed PROGRAM to initialize new home directories", "PROGRAM");
+  opts(
+      "--initjail?",
+      [this](path arg) {
+        arg = weakly_canonical(parsing_config_file_ ? homejaipath_ / arg : arg);
+        if (access(jailinit_.c_str(), X_OK)) {
+          if (errno == ENOENT)
+            return;
+          else
+            err<Options::Error>("{}: {}", arg.string(),
+                                errno == EACCES ? "no execute permission"
+                                                : strerror(errno));
+        }
+        jailinit_ = arg;
+      },
+      "Like --initjail, but silently ignore non-existent PROGRAM", "PROGRAM");
   opts(
       "--mask",
       [this](std::string_view arg) {
@@ -1429,6 +1490,9 @@ The default is CMD.conf if it exists, otherwise default.conf)",
 
   // Re-parse command line to override files
   opts->parse_argv(argc, argv);
+
+  setenv("JAI_JAIL", conf.sandbox_name_.c_str(), 1);
+  setenv("JAI_MODE", std::format("{}", conf.mode_).c_str(), 1);
 
   restore.reset();
 

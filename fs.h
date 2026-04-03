@@ -171,10 +171,11 @@ bool is_fd_at_path(int targetfd, int dfd, const path &file,
 
 bool is_dir_empty(int dirfd);
 
+using CreateCB = std::function<void(int)>;
+
 Fd ensure_dir(
     int dfd, const path &p, mode_t perm, FollowLinks follow,
-    bool okay_if_other_owner = false,
-    std::function<void(int)> createcb = [](int) {});
+    bool okay_if_other_owner = false, CreateCB createcb = [](int) {});
 
 void make_whiteout(int dfd, const path &p);
 
@@ -336,7 +337,7 @@ create_warn(int fd)
 
 Fd ensure_file(
     int dfd, path file, std::string_view contents, int mode = 0600,
-    std::function<void(int)> createcb = [](int) {});
+    CreateCB createcb = [](int) {});
 
 using XattrVal = std::vector<std::byte>;
 

@@ -25,9 +25,12 @@ struct CompSet {
   }
 };
 
+enum class PathType { kAny, kDir, kExec };
+
 static void
-complete_path(int dfd, CompSet &c, bool dir_only)
+complete_path(int dfd, CompSet &c, PathType ptype)
 {
+  using enum PathType;
   path arg(c.arg());
   std::string stem = arg.filename();
 
@@ -36,15 +39,31 @@ complete_path(int dfd, CompSet &c, bool dir_only)
     return;
   while (auto de = readdir(*d)) {
     std::string_view name = d_name(de);
+    std::optional<struct stat> sb;
+
     if (name == "." || name == ".." || !name.starts_with(stem))
       continue;
     if (de->d_type == DT_UNKNOWN || de->d_type == DT_LNK) {
-      struct stat sb;
-      if (!fstatat(dirfd(*d), d_name(de), &sb, 0) && S_ISDIR(sb.st_mode))
-        de->d_type = DT_DIR;
+      if (!fstatat(dirfd(*d), d_name(de), &sb.emplace(), 0)) {
+        if (S_ISDIR(sb->st_mode))
+          de->d_type = DT_DIR;
+        else if (S_ISREG(sb->st_mode))
+          de->d_type = DT_REG;
+      }
+      else sb.reset();
     }
-    if (dir_only && de->d_type != DT_DIR)
+    if (ptype == kDir && de->d_type != DT_DIR)
       continue;
+    if (ptype == kExec) {
+      if (de->d_type == DT_REG) {
+        if (!sb && fstatat(dirfd(*d), d_name(de), &sb.emplace(), 0))
+          continue;
+        if (!(sb->st_mode & 0111))
+          continue;
+      }
+      else if (de->d_type != DT_DIR)
+        continue;
+    }
     c.output("{}{}", (arg.parent_path() / d_name(de)).string(),
              de->d_type == DT_DIR ? "/" : " ");
   }
@@ -85,6 +104,7 @@ complete_env(CompSet &c, bool eq)
 int
 Config::complete(Completions c)
 {
+  using enum PathType;
   using enum Completions::Disposition;
   if (c.kind >= 0) {
     std::println("_command_offset {}", c.kind - 1);
@@ -113,11 +133,13 @@ Config::complete(Completions c)
                                             "--xdir", "-r", "--rdir", "--rdir?",
                                             "--storage"},
                                  opt))
-    complete_path(AT_FDCWD, cs, true);
+    complete_path(AT_FDCWD, cs, kDir);
   else if (std::ranges::contains(std::array{"--script", "--script?"}, opt))
-    complete_path(AT_FDCWD, cs, false);
+    complete_path(AT_FDCWD, cs, kAny);
+  else if (std::ranges::contains(std::array{"--initjail", "--initjail?"}, opt))
+    complete_path(AT_FDCWD, cs, kExec);
   else if (std::ranges::contains(std::array{"--mask", "--unmask"}, opt))
-    complete_path(home(), cs, false);
+    complete_path(home(), cs, kAny);
   else if (std::ranges::contains(std::array{"-C", "--conf", "--conf?"}, opt))
     complete_config(home_jai(), cs, ".conf");
   else if (std::ranges::contains(std::array{"-j", "--jail"}, opt))

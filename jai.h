@@ -94,12 +94,14 @@ struct Config {
   PathSet mask_files_;
   bool mask_warn_{};
   bool parsing_config_file_{};
+  bool need_initjail_;
 
   std::string user_;
   path homepath_;
   path homejaipath_;
   path storagedir_;
   path sandbox_name_;
+  path jailinit_;
   Credentials user_cred_;
   Credentials untrusted_cred_;
   path shell_;
@@ -129,6 +131,7 @@ struct Config {
   void parse_config_fd(int fd, Options *opts = nullptr);
   bool parse_config_file(path file, Options *opts = nullptr);
   std::vector<const char *> make_env();
+  void init_jail(int newhomefd);
 
   static void fix_proc();
   [[noreturn]] static void parent_loop(pid_t jai_init_pid, int stop_requests);
@@ -145,11 +148,12 @@ struct Config {
     check_user(xfstat(fd), path_for_error.empty() ? fdpath(fd) : path_for_error,
                untrusted_ok);
   }
-  Fd ensure_udir(int dfd, const path &p, mode_t perm = 0700,
-                 FollowLinks follow = kFollow)
+  Fd ensure_udir(
+      int dfd, const path &p, mode_t perm = 0700, FollowLinks follow = kFollow,
+      CreateCB createcb = [](int) {})
   {
     auto _restore = asuser();
-    Fd fd = ensure_dir(dfd, p, perm, follow);
+    Fd fd = ensure_dir(dfd, p, perm, follow, false, createcb);
     check_user(*fd);
     return fd;
   }

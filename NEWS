@@ -3,6 +3,8 @@
 
 ** New features
 
+Added the --initjail and --initjail? options.
+
 Allow -u and -j together to specify only one sandbox to unmount.
 
 Sandboxes now mount a writable /dev/shm (accessible outside the

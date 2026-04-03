@@ -264,6 +264,42 @@ opencode`):
     dir .codex
     EOF
 
+Suppose that you put a skeletal set of dot files in
+`$HOME/.jai/.skel`--for example, `$HOME/.jai/.skel/.bashrc`,
+`$HOME/.jai/.skel/.inputrc` and you want all newly created strict or
+bare jails to have these files in the home directory.  Suppose further
+that you want to make sure github's public SSH keys are always in your
+`known_hosts` files, even though you mask `.ssh` in casual jails.  You
+could create an initialization script as follows:
+
+``` bash
+cat > ~/.jai/.initjail <<'EOF'
+#!/bin/bash
+
+# Out of paranoia, make sure this isn't run in your real
+# home directory
+if [[ $(readlink -f "$HOME") == $(readlink -f .) ]]; then
+    echo Do not run this in your real home directory>&2
+    exit 1
+fi
+
+# When creating strict/bare mode jails, populate the new home
+# directory with the contents of $HOME/.jai/.skel/
+if [[ $JAI_MODE == strict || $JAI_MODE == bare ]]; then
+    cp -rL "$JAI_CONFIG_DIR/.skel/." .
+fi
+
+# In any kind of new jail, copy github's public key to your new .ssh
+# directory.  (Casual jails mask .ssh by default, so you need to
+# create the directory regardless of mode.)
+mkdir --mode=0700 .ssh
+grep -E "^github.com " "$HOME/.ssh/known_hosts" > .ssh/known_hosts
+EOF
+
+chmod +x ~/.jai/.initjail
+echo initjail .initjail >> ~/.jai/.defaults
+```
+
 # OPTIONS
 
 `--init`
@@ -431,11 +467,29 @@ opencode`):
   file `$JAI_SCRIPT` from within the sandbox.
 
     Note that each script file is included only once in the
-concatenated file, starting with script files specified on the command
-line, then those in `.conf` file, then those in `.jail` files.  This
-is because earlier files can bypass processing of later ones by using
-the bash `return` builtin, or can make variables read-only via the
-`readonly` or `declare -r` bash builtins.
+  concatenated file, starting with script files specified on the
+  command line, then those in `.conf` file, then those in `.jail`
+  files.  This is because earlier files can bypass processing of later
+  ones by using the bash `return` builtin, or can make variables
+  read-only via the `readonly` or `declare -r` bash builtins.
+
+`--initjail` *program*, `--initjail?` *program*
+: If the jail does not exist yet, then after creating it, jai will run
+  *program* outside any jail, but with the current working directory
+  set to the external location of what the jails home will be.  In
+  casual jails, the current working directory will be
+  `/run/jai/$USER/`*jail*`.home`, while in bare and strict jails it
+  will be `$JAI_CONFIG_DIR/`*jail*`.home`.  (`$JAI_CONFIG_DIR` will
+  always be set in the script, even if you are using the default
+  location of `$HOME/.jai`.)  You can use this to set an executable
+  script to populate the home directories of newly created jails from
+  your existing home directory.  Be sure to check the `$JAI_MODE`
+  environment variable as you will probably want to initialize casual
+  jails differently from strict/bare jails.
+
+    Note that *program* is relative to the current working directory
+  when `--initjail` is specified on the command line, and relative to
+  `$JAI_CONFIG_DIR` when specified in a configuration file.
 
 `--command` *bash-command*
 : If you set this option, jai will launches the jailed program you
