@@ -1,6 +1,5 @@
 #include "jai.h"
 #include "fs.h"
-#include "move_only_function.h"
 
 #include <cassert>
 #include <csignal>
@@ -1394,8 +1393,8 @@ The default is CMD.conf if it exists, otherwise default.conf)",
     return 0;
   }
 
-  if (opt_u && !conf.grant_cwd_ || !conf.grant_directories_.empty() ||
-      !cmd.empty()) {
+  if (opt_u &&
+      (!conf.grant_cwd_ || !conf.grant_directories_.empty() || !cmd.empty())) {
     std::println(stderr, "-u is not compatible with -d, -D, or a command");
     usage(2);
   }
