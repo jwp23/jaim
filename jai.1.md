@@ -699,6 +699,9 @@ Overlayfs can be flaky.  If the attributes on the `default.changes`
 directory get out of sync, it may require making a new
 `default.changes` directory to get around mounting errors.
 
+If the jailed program terminates with a signal, jai exits with status
+255 rather than emulating the signal death.
+
 # SEE ALSO
 
 <https://github.com/stanford-scs/jai> - jai home page
