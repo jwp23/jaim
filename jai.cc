@@ -592,8 +592,10 @@ Config::make_mnt_ns()
   xmnt_move(*home, -1, homepath_);
   if (passwd)
     xmnt_move(*passwd, -1, "/etc/passwd");
-  if (rundir)
+  if (rundir) {
+    recursive_umount(xdgrun, true);
     xmnt_move(*rundir, -1, xdgrun);
+  }
   if (shmdir) {
     umount2("/dev/shm", MNT_DETACH);
     xmnt_move(*shmdir, -1, "/dev/shm");
