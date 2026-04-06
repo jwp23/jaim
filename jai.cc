@@ -548,7 +548,7 @@ Config::make_mnt_ns()
   if (mode_ == kStrict)
     passwd = clone_tree(*make_private_passwd());
   path xdgrun = std::format("/run/user/{}", user_cred_.uid_);
-  Fd rundir = grant_directories_.contains(xdgrun)
+  Fd rundir = grant_directories_.contains(xdgrun) || access(xdgrun.c_str(), 0)
                   ? Fd{}
                   : clone_tree(*make_private_tmp(".run", true));
   Fd shmdir;

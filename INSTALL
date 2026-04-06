@@ -1,13 +1,16 @@
 
 To build and use jai, you will need the following:
 
- - A modern C++ compiler (tested with gcc 14, gcc 15 and clang 22)
+ - A modern C++ compiler (tested with gcc 14, 15 and clang 19, 22)
 
  - A modern version of Linux (kernel 6.13 and later should work)
 
 In older versions of Ubuntu, you may may need to install gcc-14 and
 g++14 set the environment variable CXX=g++-14 to get a recent enough
 compiler.
+
+Alternatively, you may neet to install clang-19 and libc++-19-dev and
+export CXX="clang++-19 -stdlib=libc++" before running configure.
 
 To build from a release tarball, run:
 
