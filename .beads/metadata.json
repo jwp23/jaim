@@ -1,0 +1,10 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_server_host": "127.0.0.1",
+  "dolt_database": "ja",
+  "project_id": "a2bceed0-450f-4b8e-92bd-983a8eda8158",
+  "dolt_host": "127.0.0.1",
+  "dolt_user": "root"
+}

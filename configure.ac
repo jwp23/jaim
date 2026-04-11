@@ -1,7 +1,6 @@
-AC_INIT([jai], [0.3-dev],
-   [https://github.com/stanford-scs/jai/issues
-   or https://www.scs.stanford.edu/~dm/addr/],,
-   [https://jai.scs.stanford.edu/])
+AC_INIT([jaim], [0.3-dev],
+   [https://github.com/jpresley/jaim/issues],,
+   [https://github.com/jpresley/jaim/])
 AM_INIT_AUTOMAKE([foreign -Wall -Werror serial-tests])
 AC_CONFIG_HEADERS([config.h])
 
@@ -22,40 +21,17 @@ AC_LANG_POP([C++])
 AC_PATH_PROG([PATH_BASH], [bash], [/bin/bash])
 AC_DEFINE_UNQUOTED([PATH_BASH], ["$PATH_BASH"], [Path to bash])
 
-# --with-untrusted-user=USER (default: auto-detect from password file or "jai")
-AC_ARG_WITH([untrusted-user],
-  [AS_HELP_STRING([--with-untrusted-user=USER],
-    [name of untrusted sandbox user (default: autodetect or jai)])],
-  [UNTRUSTED_USER="$withval"],
-  [UNTRUSTED_USER=""])
-
-AS_IF([test -z "$UNTRUSTED_USER"], [
-  UNTRUSTED_USER=$(getent passwd 2>/dev/null | \
-    awk -F: '$3 != 0 && $5 == "JAI sandbox untrusted user" { print $1; exit }')
-  AS_IF([test -z "$UNTRUSTED_USER"], [
-    AS_IF([getent passwd jai > /dev/null],
-      [UNTRUSTED_USER=_jai], [UNTRUSTED_USER=jai])
-  ])
-])
-AC_MSG_NOTICE([untrusted user: $UNTRUSTED_USER])
-AC_SUBST([UNTRUSTED_USER])
-AC_DEFINE_UNQUOTED([UNTRUSTED_USER], ["$UNTRUSTED_USER"],
-  [Username for the sandboxed untrusted user])
-
-AC_MSG_CHECKING(For systemd version)
-[systemd_version="$(systemd-sysusers --version 2> /dev/null| \
-                 sed -ne '1s/[^0-9]*\([0-9][0-9]*\).*/\1/p')"
-: ${systemd_version:=none}]
-AC_MSG_RESULT($systemd_version)
-
-AS_IF([test "${systemd_version/none/0}" -ge 257], [SYSUSER_U=u!], [SYSUSER_U=u])
-AC_SUBST([SYSUSER_U])
+# Check for macOS sandbox.h (required for sandbox profile support)
+AC_LANG_PUSH([C++])
+AC_CHECK_HEADER([sandbox.h], [],
+  [AC_MSG_ERROR([sandbox.h not found -- macOS sandbox support is required])])
+AC_LANG_POP([C++])
 
 TEST_ABS_TOP_BUILDDIR=`pwd -P`
 TEST_ABS_TOP_SRCDIR=`cd "$srcdir" && pwd -P`
 AC_SUBST([TEST_ABS_TOP_BUILDDIR])
 AC_SUBST([TEST_ABS_TOP_SRCDIR])
 
-AC_CONFIG_FILES([Makefile tests/Makefile jai.conf tests/common.sh tests/setup-setuid.sh])
+AC_CONFIG_FILES([Makefile tests/Makefile tests/common.sh tests/setup-setuid.sh])
 AC_CONFIG_COMMANDS([test-scripts], [chmod +x tests/common.sh tests/setup-setuid.sh])
 AC_OUTPUT
