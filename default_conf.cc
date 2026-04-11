@@ -252,6 +252,41 @@ mode casual
 
 )";
 
+extern const std::string default_claude_conf =
+  R"(# Per-command configuration for the Anthropic Claude Code CLI.
+#
+# Casual mode makes $HOME read-only so that a confused or
+# prompt-injected agent cannot delete or corrupt your files.  That
+# protection, however, also blocks Claude Code's normal write paths
+# for session state and user-level settings.  This config grants the
+# minimum writes Claude Code needs while leaving the rest of $HOME
+# (dotfiles, config, shell history, .ssh, .aws, browser data, etc.)
+# read-only or masked as configured by default.conf.
+#
+# jaim picks this file up automatically when you run `jaim claude`,
+# per the <name>.conf discovery rule documented in jaim(1).
+
+conf default.conf
+
+# User-level Claude Code tree.  Grants full read/write to the whole
+# ~/.claude/ subtree, which includes:
+#   ~/.claude/projects/.../*.jsonl  - session transcripts (append per turn)
+#   ~/.claude/CLAUDE.md             - user-level memory / preferences
+#   ~/.claude/settings.json         - user-level settings incl. MCP servers
+#   ~/.claude/commands/             - user-level slash commands
+#   ~/.claude/compact/              - compact caches
+# The common case for users who manage MCP servers, edit their
+# CLAUDE.md, or customize settings via Claude Code itself.
+dir .claude
+
+# Global Claude Code config (conversation index, permissions, MCP
+# runtime state) lives in the home root, not under ~/.claude/, so it
+# needs its own grant.  Claude Code uses atomic writes for this file,
+# so the `file` directive also permits .claude.json.<suffix> sibling
+# temp files used by the rename step.
+file .claude.json
+)";
+
 extern const std::string default_jaimrc =
   R"(# -*- shell-script-mode -*-
 

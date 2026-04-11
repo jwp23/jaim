@@ -431,6 +431,44 @@ Config::generate_sandbox_profile()
       p += std::format("(allow file* (subpath \"{}\"))\n", dp);
   }
 
+  // File grants: atomic-write aware.  Each `file PATH` grant emits
+  // two rules:
+  //   1. A literal match for PATH itself.
+  //   2. A regex match for `PATH.<suffix>` siblings used by atomic-
+  //      write libraries (write-file-atomic in node, atomicwrites
+  //      in Python, tempfile + rename in most others).  Those
+  //      libraries write to a temp sibling then rename() it into
+  //      place, which requires file-write ops on BOTH the temp and
+  //      the target — the literal rule handles the target, the
+  //      sibling regex handles the temp.
+  // A single combined regex with an optional group would be terser,
+  // but Seatbelt's regex engine rejects some POSIX ERE constructs
+  // (observed: `(\.[A-Za-z0-9_-]+)?` fails to parse), so we split
+  // the two cases into separate rules.  This is still tighter than
+  // granting the whole parent directory.
+  for (const auto &[f, flags] : grant_files_) {
+    const char *rule = (flags & kGrantRO) ? "file-read*" : "file*";
+    p += std::format("(allow {} (literal \"{}\"))\n",
+                     rule, sbpl_escape(f.string()));
+    // Use `.+` rather than an explicit character class for the
+    // suffix: Seatbelt's regex engine appears to mis-parse bracket
+    // expressions that immediately follow `\.` (observed: it drops
+    // the leading `[` and reports "unterminated bracket expression"
+    // on the remainder), so we let any non-empty suffix match.
+    // Atomic-write libraries pick the suffix; we only need the
+    // prefix anchor for security.
+    auto pattern = std::format("^{}\\..+$",
+                               sbpl_regex_escape(f.string()));
+    std::string quoted;
+    quoted.reserve(pattern.size());
+    for (char c : pattern) {
+      if (c == '"')
+        quoted += '\\';
+      quoted += c;
+    }
+    p += std::format("(allow {} (regex #\"{}\"))\n", rule, quoted);
+  }
+
   return p;
 }
 
@@ -694,6 +732,27 @@ Config::opt_parser(bool dotjail)
       },
       "Undo the effects of a previous --dir option", "DIR");
   opts(
+      "-F", "--file",
+      [this](std::string_view arg) {
+        path p(expand(arg));
+        // weakly_canonical so the grant works for files that do not
+        // exist yet (e.g. ~/.claude.json before the first Claude Code
+        // run creates it).  Seatbelt does not require the path to
+        // exist at profile generation time.
+        grant_files_.emplace(
+            weakly_canonical(parsing_config_file_ ? homepath_ / p : p), 0);
+      },
+      "Grant write access to FILE (and atomic-write .<suffix> siblings)",
+      "FILE");
+  opts(
+      "--xfile",
+      [this](std::string_view arg) {
+        path p(expand(arg));
+        grant_files_.erase(
+            weakly_canonical(parsing_config_file_ ? homepath_ / p : p));
+      },
+      "Undo the effects of a previous --file option", "FILE");
+  opts(
       "-D", "--nocwd", [this] { grant_cwd_ = false; },
       "Do not grant access to the current working directory");
   if (!dotjail)
@@ -938,6 +997,8 @@ The default is CMD.conf if it exists, otherwise default.conf)",
               create_warn);
   ensure_file(conf.home_jaim(), "default.conf", default_conf, 0600, create_warn);
   ensure_file(conf.home_jaim(), ".jaimrc", default_jaimrc, 0600, create_warn);
+  ensure_file(conf.home_jaim(), "claude.conf", default_claude_conf, 0600,
+              create_warn);
 
   if (opt_init) {
     ensure_file(conf.storage(), "default.jail", default_jail, 0600,

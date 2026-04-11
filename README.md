@@ -149,6 +149,7 @@ jaim
 -m, --mode casual|bare|strict   Set the sandbox mode
 -d, --dir DIR                   Grant full access to DIR
 -r, --rdir DIR                  Grant read-only access to DIR
+-F, --file FILE                 Grant write access to a specific FILE
 -j, --jail NAME                 Use a named sandbox
 -D, --nocwd                     Don't grant access to the current directory
 -C, --conf FILE                 Use a specific configuration file
@@ -162,20 +163,30 @@ jaim
 
 ### Examples
 
-Run Claude Code with access to an extra directory:
+Run Claude Code.  On first run, jaim creates `~/.jaim/claude.conf`
+with the grants Claude Code needs (write access to `~/.claude/` for
+session state and user-level settings, plus `~/.claude.json` for its
+global config), so casual-mode home protection stays intact while
+Claude Code can still persist its state:
+
+```sh
+jaim claude
+```
+
+Give Claude Code access to an extra data directory on top of the
+defaults:
 
 ```sh
 jaim -d ~/data claude
 ```
 
-Grant writable access to a specific state directory under `$HOME`.
-Because casual mode makes `$HOME` read-only, tools that need to
-persist state outside the current working directory (for example
-`~/.claude`, `~/.config/something`) must have that directory
-explicitly granted:
+Casual mode makes `$HOME` read-only.  Tools other than the ones
+jaim ships presets for (see **Using jaim with coding agents** below)
+need their state paths granted explicitly.  Use `-d` for
+directories and `-F` for individual files:
 
 ```sh
-jaim -d ~/.claude claude
+jaim -d ~/.config/mytool -F ~/.mytoolrc mytool
 ```
 
 Run in strict mode with no home directory access:
@@ -191,6 +202,26 @@ jaim -j project-a claude
 jaim -j project-b claude
 ```
 
+### Using jaim with coding agents
+
+jaim exists to jail coding agents, and casual mode is read-only on
+`$HOME` so a confused or prompt-injected agent cannot delete your
+files.  Agents still need to write *something* in `$HOME` — session
+history, user-level config, MCP server settings — so each supported
+agent ships a per-command config file that grants those specific
+paths and nothing else.
+
+**Claude Code** (`claude`): `~/.jaim/claude.conf` ships with jaim.
+Grants `~/.claude/` (projects, `CLAUDE.md`, `settings.json`, MCP
+servers) and `~/.claude.json` (global config).  Running `jaim claude`
+picks it up automatically.
+
+**Other agents** (`aider`, `codex`, `cursor-cli`, ...): create a
+`~/.jaim/<name>.conf` modeled on `claude.conf`.  Use `sudo fs_usage
+-w -f filesys | grep <name>` from another terminal while the tool
+runs to discover the exact paths it writes, then add `dir` /
+`file` directives for each one.
+
 ## Configuration
 
 Configuration lives in `~/.jaim/` (or `$JAIM_CONFIG_DIR`):
@@ -201,8 +232,31 @@ Configuration lives in `~/.jaim/` (or `$JAIM_CONFIG_DIR`):
 | `default.conf`    | Default configuration (includes `.defaults`)  |
 | `default.jail`    | Default sandbox settings (mode, etc.)         |
 | `.jaimrc`         | Bash functions available in sandboxed shells  |
+| `claude.conf`     | Per-command config for Claude Code (shipped)  |
 | `<name>.conf`     | Per-command configuration                     |
 | `<name>.jail`     | Per-sandbox settings                          |
+
+Configuration files accept the same directives as the command line
+(without the leading dashes).  The most useful for tailoring a
+sandbox are:
+
+| Directive        | Purpose                                           |
+|------------------|---------------------------------------------------|
+| `mode casual...` | Set the sandbox mode                              |
+| `mask FILE`      | Deny access to `$HOME/FILE`                       |
+| `unmask FILE`    | Undo a previous `mask`                            |
+| `dir DIR`        | Grant full access to a directory                  |
+| `rdir DIR`       | Grant read-only access to a directory             |
+| `file FILE`      | Grant write access to a specific file             |
+| `setenv VAR=..`  | Set an environment variable                       |
+| `unsetenv VAR`   | Strip an environment variable (supports `*`)      |
+
+The `file` directive is atomic-write aware: it grants access to
+`FILE` itself and to any `FILE.<suffix>` temp sibling used by
+libraries like node's `write-file-atomic` or Python's `atomicwrites`.
+This is tighter than granting the whole parent directory and lets
+you unblock a single dotfile in the home root without exposing the
+rest of `$HOME`.
 
 To view the built-in defaults:
 

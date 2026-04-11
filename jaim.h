@@ -82,6 +82,7 @@ extern const std::string jaim_defaults;
 extern const std::string default_conf;
 extern const std::string default_jail;
 extern const std::string default_jaimrc;
+extern const std::string default_claude_conf;
 
 struct Config {
   enum Mode { kCasual, kBare, kStrict };
@@ -90,6 +91,7 @@ struct Config {
 
   Mode mode_{kStrict};
   PathMap<int> grant_directories_;
+  PathMap<int> grant_files_;
   bool grant_cwd_{true};
   std::set<std::string, std::less<>> env_filter_;
   std::map<std::string, std::string, std::less<>> setenv_;
