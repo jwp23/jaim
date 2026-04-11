@@ -105,6 +105,22 @@ mask .config/Keybase
 mask .config/kube
 mask .docker
 mask .password-store
+# Credential-bearing files for common developer toolchains.  Each of
+# these holds plaintext secrets (registry tokens, publish keys, DB
+# passwords) that would otherwise be readable in casual mode.  Most
+# are per-file masks rather than whole-directory so non-credential
+# config alongside them (e.g. .cargo/config.toml) stays accessible.
+mask .pgpass
+mask .my.cnf
+mask .npmrc
+mask .yarnrc
+mask .yarnrc.yml
+mask .pypirc
+mask .cargo/credentials.toml
+mask .gem/credentials
+mask .hex/hex.config
+mask .config/helm/repositories.yaml
+mask .config/rclone/rclone.conf
 mask .mozilla
 mask .config/BraveSoftware
 mask .config/chromium
@@ -128,6 +144,14 @@ mask Library/Application\ Support/Vivaldi
 mask Library/Application\ Support/Arc
 mask .bash_history
 mask .zsh_history
+# Modern shells store history under XDG or in their own dotfiles.
+# Shell histories routinely contain one-liners with secrets pasted
+# inline (curl with Authorization headers, env var exports, password
+# prompts echoed by mistake), so treat them the same as bash/zsh.
+mask .local/share/fish/fish_history
+mask .local/share/nushell/history.txt
+mask .local/share/nushell/history.sqlite3
+mask .xonsh_history
 
 # The following environment variables will be removed from sandboxed
 # environments.  You can use * as a wildcard to match any variables
