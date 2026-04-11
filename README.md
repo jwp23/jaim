@@ -63,13 +63,22 @@ can run AI assistants without giving them free rein over your system.
 ## Requirements
 
 * macOS on Apple Silicon (arm64)
-* A C++ compiler with C++23 support (Xcode 16+ / Apple Clang 18+)
+* **Xcode Command Line Tools** -- install with `xcode-select --install`.
+  This provides the `clang++` compiler. jaim needs C++23 support
+  (Xcode 16+ / Apple Clang 18+); if the build fails with errors about
+  unknown C++ features, update Xcode from the App Store.
+* *Optional:* `autoconf` and `automake` -- only needed for the autotools
+  build (`brew install autoconf automake`).
+* *Optional:* `pandoc` -- only needed to regenerate the `jaim.1` man
+  page from `jaim.1.md` (`brew install pandoc`).
 
 ## Building and installing
 
 ### Quick build (recommended)
 
-The included `GNUmakefile` builds jaim without autotools:
+Nothing from Homebrew is required for this path -- Xcode Command Line
+Tools is sufficient. The included `GNUmakefile` builds jaim without
+autotools:
 
 ```sh
 make
@@ -91,7 +100,13 @@ make PREFIX=/usr/local install   # requires sudo
 
 ### Autotools build
 
-If you prefer the autotools workflow:
+If you prefer the autotools workflow, first install the prerequisites:
+
+```sh
+brew install autoconf automake
+```
+
+Then build:
 
 ```sh
 ./autogen.sh    # only from a git checkout
