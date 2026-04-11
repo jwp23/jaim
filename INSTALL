@@ -1,47 +1,33 @@
 
-To build and use jai, you will need the following:
+To build and use jaim, you will need the following:
 
- - A modern C++ compiler (tested with gcc 14, 15 and clang 19, 22)
+ - macOS on arm64 (Apple Silicon)
 
- - A modern version of Linux (kernel 6.13 and later should work)
+ - A C++ compiler with C++23 support (Xcode 16+ / Apple clang 18+)
 
-In older versions of Ubuntu, you may may need to install gcc-14 and
-g++14 set the environment variable CXX=g++-14 to get a recent enough
-compiler.
+ - Autoconf, automake, and optionally pandoc (to format the man page)
 
-Alternatively, you may neet to install clang-19 and libc++-19-dev and
-export CXX="clang++-19 -stdlib=libc++" before running configure.
+To build from a git checkout, run:
+
+    ./autogen.sh
+    ./configure
+    make
 
 To build from a release tarball, run:
 
     ./configure
     make
 
-To build from a git checkout, you will also need to install autoconf,
-automake, and pandoc (to format the man page).  Run:
+To install:
 
-    ./autogen.sh
-    ./configure
-    make
-
-To install (must be root for setuid):
-
-    sudo make install
-    sudo systemd-sysusers
+    make install
 
 To override the installation prefix:
 
-    ./configure --prefix=/usr
+    ./configure --prefix=/usr/local
     make
-    sudo make install
-    sudo systemd-sysusers
+    make install
 
-Most of the tests require a setuid root version of jai to test.  Since
-people's build directories are often mounted nosuid, make `jai.suid`
-in the top of your build directory a symbolic link to a place with a
-setuid executable.  You can run:
-
-    sudo test/setup-setuid.sh
-
-to do this automatically in /var/tmp, which is generally mounted
-setuid capable.
+jaim uses macOS sandbox profiles (Seatbelt) to restrict sandboxed
+processes.  Unlike the Linux version (jai), it does not require root
+privileges or setuid installation.

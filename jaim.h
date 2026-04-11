@@ -8,10 +8,7 @@
 #include "fs.h"
 #include "options.h"
 
-#include <linux/sched.h>
-#include <sched.h>
 #include <signal.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 extern "C" char **environ;
@@ -44,12 +41,12 @@ var_expand(std::string_view in, Exp &&exp = env_or_empty)
 }
 
 inline pid_t
-xfork(std::uint64_t flags = 0)
+xfork()
 {
-  clone_args ca{.flags = flags, .exit_signal = SIGCHLD};
-  if (auto ret = syscall(SYS_clone3, &ca, sizeof(ca)); ret != -1)
-    return ret;
-  syserr("clone3");
+  auto ret = fork();
+  if (ret == -1)
+    syserr("fork");
+  return ret;
 }
 
 inline sigset_t
@@ -61,22 +58,10 @@ sigsingleton(int sig)
   return ret;
 }
 
-#define xsetns(fd, type)                                                       \
-  do {                                                                         \
-    if (setns(fd, type)) {                                                     \
-      warn("setns({}, {}): {}", fdpath(fd), #type, strerror(errno));           \
-      exit(1);                                                                 \
-    }                                                                          \
-  } while (0)
-
-constexpr const char *kUntrustedUser = UNTRUSTED_USER;
-constexpr const char *kUntrustedGecos = "JAI sandbox untrusted user";
-constexpr const char *kRunRoot = "/run/jai";
-
-extern const std::string jai_defaults;
+extern const std::string jaim_defaults;
 extern const std::string default_conf;
 extern const std::string default_jail;
-extern const std::string default_jairc;
+extern const std::string default_jaimrc;
 
 struct Config {
   enum Mode { kCasual, kBare, kStrict };
@@ -92,38 +77,28 @@ struct Config {
   std::vector<path> script_inputs_;
   std::string shellcmd_;
   PathSet mask_files_;
-  bool mask_warn_{};
   bool parsing_config_file_{};
 
   std::string user_;
   path homepath_;
-  path homejaipath_;
+  path homejaimpath_;
   path storagedir_;
   path sandbox_name_;
-  path jailinit_;
+  path jaiminit_;
   Credentials user_cred_;
-  Credentials untrusted_cred_;
   path shell_;
   mode_t old_umask_ = 0755;
 
   Fd home_fd_;
-  Fd home_jai_fd_;
+  Fd home_jaim_fd_;
   Fd storage_fd_;
-  Fd run_jai_fd_;
-  Fd run_jai_user_fd_;
-
-  // Hold some file descriptors to prevent unmounting
-  std::vector<Fd> mp_holder_;
 
   PathSet config_loop_detect_;
 
   void init_credentials();
-  Fd make_idmap_ns();
-  Fd make_mnt_ns();
+  std::string generate_sandbox_profile();
   path make_script();
-  void exec(int nsfd, char **argv);
-  int unmount();
-  int unmountall();
+  void exec(char **argv);
   std::unique_ptr<Options> opt_parser(bool dotjail = false);
 
   int complete(Options::Completions c);
@@ -132,51 +107,29 @@ struct Config {
   std::vector<const char *> make_env();
   void init_jail(int newhomefd);
 
-  static void fix_proc();
-  [[noreturn]] static void parent_loop(pid_t jai_init_pid, int stop_requests);
-  void static pid1(Fd stop_me, path script_path);
-  [[noreturn]] void pid2(char **argv);
-
-  [[nodiscard]] static Defer asuser(const Credentials *crp);
-  [[nodiscard]] Defer asuser() { return asuser(&user_cred_); }
-  void check_user(const struct stat &sb, std::string path_for_error = {},
-                  bool untrusted_ok = false);
-  void check_user(int fd, std::string path_for_error = {},
-                  bool untrusted_ok = false)
+  void check_user(const struct stat &sb, std::string path_for_error = {});
+  void check_user(int fd, std::string path_for_error = {})
   {
-    check_user(xfstat(fd), path_for_error.empty() ? fdpath(fd) : path_for_error,
-               untrusted_ok);
+    check_user(xfstat(fd), path_for_error.empty() ? fdpath(fd) : path_for_error);
   }
   Fd ensure_udir(
       int dfd, const path &p, mode_t perm = 0700, FollowLinks follow = kFollow,
       CreateCB createcb = [](int) {})
   {
-    auto _restore = asuser();
     Fd fd = ensure_dir(dfd, p, perm, follow, false, createcb);
     check_user(*fd);
     return fd;
   }
-  void clean_overlay_work(int dfd, path fname);
 
   int home();
-  int home_jai(bool create = false);
+  int home_jaim(bool create = false);
   int storage();
-  int run_jai();
-  int run_jai_user();
   const path &cwd()
   {
-    if (cwd_.empty()) {
-      auto restore = asuser();
+    if (cwd_.empty())
       cwd_ = canonical(std::filesystem::current_path());
-    }
     return cwd_;
   }
-
-  Fd make_blacklist(int dfd, path name);
-  Fd make_home_overlay();
-  Fd make_private_tmproot();
-  Fd make_private_tmp(path subdir = {}, bool userowned = false);
-  Fd make_private_passwd();
 
   const char *env_lookup(std::string_view var)
   {
@@ -196,16 +149,6 @@ struct Config {
   static bool name_ok(path p)
   {
     return p.is_relative() && components(p) == 1 && *p.c_str() != '.';
-  }
-  void mask_warn()
-  {
-    if (mask_warn_) {
-      warn(R"(--mask ignored because {5}/{0}/{1}.home already mounted.
-{2:>{3}}  Run "{4} -u" to unmount overlays.)",
-           user_, sandbox_name_.string(), "", prog.filename().string().size(),
-           prog.filename().string(), kRunRoot);
-      mask_warn_ = false;
-    }
   }
 };
 

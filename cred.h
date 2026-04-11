@@ -111,5 +111,3 @@ struct std::formatter<Credentials> : std::formatter<std::string_view> {
     return super::format(creds.show(), ctx);
   }
 };
-
-std::string make_id_map(ugid_t user, ugid_t untrusted);

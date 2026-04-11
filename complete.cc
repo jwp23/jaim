@@ -1,4 +1,4 @@
-#include "jai.h"
+#include "jaim.h"
 
 #include <cassert>
 #include <dirent.h>
@@ -141,7 +141,7 @@ Config::complete(Completions c)
   else if (std::ranges::contains(std::array{"--mask", "--unmask"}, opt))
     complete_path(home(), cs, kAny);
   else if (std::ranges::contains(std::array{"-C", "--conf", "--conf?"}, opt))
-    complete_config(home_jai(), cs, ".conf");
+    complete_config(home_jaim(), cs, ".conf");
   else if (std::ranges::contains(std::array{"-j", "--jail"}, opt))
     complete_config(storage(), cs, ".jail");
   else if (opt == "--setenv")

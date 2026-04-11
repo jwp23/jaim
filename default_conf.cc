@@ -1,8 +1,8 @@
 
-#include "jai.h"
+#include "jaim.h"
 
-const std::string jai_defaults =
-    R"(# This file contains generic defaults built into jai.  It is intended
+const std::string jaim_defaults =
+    R"(# This file contains generic defaults built into jaim.  It is intended
 # to be included by other configuration files with a line:
 #
 #     conf .defaults
@@ -12,71 +12,59 @@ const std::string jai_defaults =
 # <name>.conf files after the `conf .defaults` line.  (Later lines
 # override previous ones in configuration files.)
 #
-# If you delete this file, jai will re-create it the next time it
+# If you delete this file, jaim will re-create it the next time it
 # runs.  You can also see the default contents of this file by running
 #
-#     jai --print-defaults
+#     jaim --print-defaults
 
 
-# By default, jai stores private home directory state in $HOME/.jai
-# (or in $JAI_CONFIG_DIR, if set).  However, jai works best if the
-# storage directory is not on NFS.  If your home directory is on NFS,
-# use a `storage` directive to specify a local storage location.
-# Environment variables named in ${...} will be substituted.  The
-# storage directory will automatically be organized into per-sandbox
-# subdirectories, so most configurations should use the sandbox
-# location.
+# By default, jaim stores configuration in $HOME/.jaim
+# (or in $JAIM_CONFIG_DIR, if set).
+# Environment variables named in ${...} will be substituted.
 
-# storage /some/local/directory/${JAI_USER}/.jai
+# storage /some/local/directory/${JAIM_USER}/.jaim
 
-# The default mode is strict.  A strict jail runs under the dedicated
-# jai UID and starts with an empty home directory.  A casual jail runs
-# with your own UID and makes your home directory copy-on-write via an
-# overlay mount.  Strict mode cannot grant unrestricted access to
-# directories on NFS file systems.  You will have to use bare mode
-# (which gives you a bare home directory, but still runs with your
-# UID) to expose NFS directories.  Uncomment any of the following to
-# set the mode, or override it in individual .jail files:
+# The default mode is strict.  A strict sandbox denies all access to
+# your home directory except the current working directory and any
+# explicitly granted directories.  A casual sandbox allows read access
+# to your home directory but masks sensitive files.  Bare mode is
+# similar to casual but includes more of the home directory.
+# Uncomment any of the following to set the mode, or override it in
+# individual .jail files:
 
 # mode casual
 # mode bare
 # mode strict
 
-# You can use "jail NAME" to specify different jails.  For casual
-# jails, the home directory will be in /run/jai/$USER/NAME.home, and
-# changed files will be in $HOME/.jai/NAME.changes.  For strict jails,
-# the home directory will be $HOME/.jai/NAME.home.  If you leave jail
-# undefined, the name will be "default" and the mode will default to
-# casual, but if you define this to anything including "default", then
-# the default mode will be strict.
+# You can use "jail NAME" to specify different sandboxes.
+# If you leave jail undefined, the name will be "default" and the
+# mode will default to casual, but if you define this to anything
+# including "default", then the default mode will be strict.
 
 # jail default
 
 # The script option loads bash source.  All files specified with
-# script will be concatenated and places in a single file that is
-# designated by the $JAI_SCRIPT environment variable.
+# script will be concatenated and placed in a single file that is
+# designated by the $JAIM_SCRIPT environment variable.
 #
-# The command tells jai to launch programs by running bash with the
+# The command tells jaim to launch programs by running bash with the
 # command name in "$0" and the arguments in "@".  Altering command
 # allows you set environment variables dynamically or change
 # command-line arguments.  The following settings enable shell aliases
-# and source the file $HOME/.jai/.jairc, into which you can store
+# and source the file $HOME/.jaim/.jaimrc, into which you can store
 # shell functions and command aliases.
 
-script? .jairc
-command source "${JAI_SCRIPT:-/dev/null}"; "$0" "$@"
+script? .jaimrc
+command source "${JAIM_SCRIPT:-/dev/null}"; "$0" "$@"
 
-# Masked files are deleted when an overlayfs is first created, but
-# have no effect on existing overlays or on strict/bare jails.  To
-# delete files from an existing overlay, delete them under
-# /run/jai/$USER/default.home.  Otherwise, to apply new mask
-# directives after editing this file, you can run "jai -u" to unmount
-# any existing overlays.  If you want to avoid masing any of these
-# files in one particular configuration, you can use a directive such
-# as `unmask .aws` to undo the effects from a previously included
-# default file.
+# Masked files are denied access by the sandbox profile.  In casual
+# and bare modes, these files within your home directory will be
+# inaccessible to sandboxed commands.  If you want to avoid masking
+# any of these files in one particular configuration, you can use a
+# directive such as `unmask .aws` to undo the effects from a
+# previously included default file.
 
-mask .jai
+mask .jaim
 mask .ssh
 mask .gnupg
 mask .local/share/keyrings
@@ -98,7 +86,7 @@ mask .config/mozilla
 mask .bash_history
 mask .zsh_history
 
-# The following environment variables will be removed from jail
+# The following environment variables will be removed from sandboxed
 # environments.  You can use * as a wildcard to match any variables
 # matching the pattern.  If you want to undo any of these unsetenv
 # commands in a particular config file, you can use setenv to reverse
@@ -139,38 +127,38 @@ unsetenv SLACK_WEBHOOK_URL
 # The following environment variables get set in sandboxes.  You can
 # substitute existing environment variables (before any
 # unsetenv/setenv have been applied) by including them in ${...}.  You
-# can reference ${JAI_USER} here, which gets set before configuration,
-# but not ${JAI_JAIL} or ${JAI_MODE}, which are set after.
+# can reference ${JAIM_USER} here, which gets set before configuration,
+# but not ${JAIM_JAIL} or ${JAIM_MODE}, which are set after.
 
-setenv USER=${JAI_USER}
-setenv LOGNAME=${JAI_USER}
+setenv USER=${JAIM_USER}
+setenv LOGNAME=${JAIM_USER}
 )";
 
 extern const std::string default_conf =
   R"(# The following line includes sensible defaults from the file
 # .defaults.  You can override these defaults by appending
 # configuration options to this file.  See the .defaults file or the
-# jai(1) man page for details.
+# jaim(1) man page for details.
 
 conf .defaults
 
 )";
 
 extern const std::string default_jail =
-  R"(# Set casual mode for the default jail.
+  R"(# Set casual mode for the default sandbox.
 
 mode casual
 
 )";
 
-extern const std::string default_jairc =
+extern const std::string default_jaimrc =
   R"(# -*- shell-script-mode -*-
 
-# You can use this file to define bash functions invocable from jai.
+# You can use this file to define bash functions invocable from jaim.
 #
 # To use the file, you will need the following in your .defaults file:
 #
-# command source "${JAI_SCRIPT:-/dev/null}"; "$0" "$@"
+# command source "${JAIM_SCRIPT:-/dev/null}"; "$0" "$@"
 
 # Here is an example of how to define a bash function:
 #
@@ -189,7 +177,7 @@ extern const std::string default_jairc =
 # Here are some example functions for people who like to live
 # dangerously.  These modes are not recommended, but if you are going
 # to use them anyway, better to define the dangerous functions in your
-# .jairc so you can only invoke them in jai environments.
+# .jaimrc so you can only invoke them in jaim environments.
 
 # claudeyolo() { claude --dangerously-skip-permissions "$@"; }
 

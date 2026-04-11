@@ -1,17 +1,17 @@
 # -*- shell-script -*-
 
-_jai()
+_jaim()
 {
     local cur prev words cword
     _init_completion -n = || return
 
-    # Ask jai itself for completions.  Pass every word except $0,
+    # Ask jaim itself for completions.  Pass every word except $0,
     # including the current (possibly incomplete) word.
     local -a comp_args=( "${words[@]:1}" )
     local output
-    output=$(jai --complete "${comp_args[@]}" 2>/dev/null) || return
+    output=$(jaim --complete "${comp_args[@]}" 2>/dev/null) || return
 
-    # If jai returns the special completion "_command_offset N", it
+    # If jaim returns the special completion "_command_offset N", it
     # means subcommand starts at offset N, so delegate to
     # bash-completion's _command_offset which handles completing an
     # arbitrary command (c.f. sudo).
@@ -21,7 +21,7 @@ _jai()
         return
     fi
 
-    # Otherwise jai returned sorted candidate completions, one per
+    # Otherwise jaim returned sorted candidate completions, one per
     # line, including a trailing space if the argument is complete, so
     # no need for bash to add spaces.
     compopt -o nospace -o nosort
@@ -33,4 +33,4 @@ _jai()
         COMPREPLY+=( "${line#--*=}" )
     done <<< "$output"
 } &&
-complete -F _jai jai
+complete -F _jaim jaim
