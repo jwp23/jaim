@@ -1,5 +1,15 @@
 
-# Beads / Dolt files (added by bd init)
+# Gas City workspace state
+# Machine-specific runtime and workflow artifacts from the Gas City workspace
+# that wraps this rig. Contributors bringing their own tooling should not
+# inherit these files.
+.beads/
+.gc/
+.runtime/
+.claude/
+rigs/
+
+# Beads / Dolt files (added by bd init, kept as safety net)
 .dolt/
 *.db
 .beads-credential-key
@@ -30,3 +40,11 @@
 Makefile
 Makefile.in
 compile_commands.json
+
+# jaim build artifacts
+/jaim
+/jaim-*.tar.gz
+/jaim.1
+/jaim.conf
+/jaim.suid
+
