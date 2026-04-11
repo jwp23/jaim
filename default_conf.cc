@@ -110,6 +110,22 @@ mask .config/BraveSoftware
 mask .config/chromium
 mask .config/google-chrome
 mask .config/mozilla
+# macOS browser data lives under ~/Library — not the XDG paths above —
+# so the Linux-style masks are no-ops here.  These additional masks
+# cover Safari's cookies/history, shared HTTP cookies, the login
+# keychain, and the per-browser profile directories where Chrome,
+# Firefox, Brave, Edge, Vivaldi, and Arc keep cookies, saved logins,
+# and payment methods.  Paths with spaces are escaped so the config
+# parser treats them as a single token.
+mask Library/Safari
+mask Library/Cookies
+mask Library/Keychains
+mask Library/Application\ Support/Google/Chrome
+mask Library/Application\ Support/Firefox
+mask Library/Application\ Support/BraveSoftware
+mask Library/Application\ Support/com.microsoft.edgemac
+mask Library/Application\ Support/Vivaldi
+mask Library/Application\ Support/Arc
 mask .bash_history
 mask .zsh_history
 
