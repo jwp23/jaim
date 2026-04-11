@@ -241,6 +241,7 @@ Config::generate_sandbox_profile()
   p += "  (subpath \"/sbin\")\n";
   p += "  (subpath \"/Library\")\n";
   p += "  (subpath \"/System\")\n";
+  p += "  (subpath \"/etc\")\n";
   p += "  (subpath \"/private/etc\")\n";
   p += "  (subpath \"/private/var\")\n";
   p += "  (subpath \"/dev\")\n";
