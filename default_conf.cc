@@ -178,15 +178,32 @@ unsetenv *_SOCK
 unsetenv *_SOCKET
 unsetenv *_SOCKET_PATH
 unsetenv *_TOKEN
+# Connection-string URL env vars routinely embed credentials inline
+# (e.g. postgres://user:pass@host/db), but the "*_URL" suffix is too
+# broad to strip generically — HOME_URL, PUBLIC_URL, and many other
+# benign vars share it.  Enumerate the specific names in common use
+# across Rails, Django, Celery, Sentry, and friends.  *_CONNECTION_STRING
+# above catches the explicit-name convention; these cover everything
+# else.  Upstream jai's defaults also miss these — report upstream.
+unsetenv AMQP_URL
 unsetenv AZURE_CLIENT_ID
 unsetenv AZURE_TENANT_ID
 unsetenv BB_AUTH_STRING
+unsetenv CELERY_BROKER_URL
+unsetenv CLICKHOUSE_URL
+unsetenv DATABASE_URI
 unsetenv DATABASE_URL
+unsetenv DSN
+unsetenv ELASTICSEARCH_URL
 unsetenv GOOGLE_APPLICATION_CREDENTIALS
+unsetenv INFLUXDB_URL
 unsetenv KUBECONFIG
 unsetenv MAIL
 unsetenv MONGODB_URI
 unsetenv MONGO_URI
+unsetenv MONGO_URL
+unsetenv RABBITMQ_URL
+unsetenv REDIS_URI
 unsetenv REDIS_URL
 unsetenv SENTRY_DSN
 unsetenv SLACK_WEBHOOK_URL
