@@ -60,19 +60,16 @@ It scans the working tree against `HEAD` and flags:
 Exits 0 on clean, nonzero on violations. Pass `--staged` to check
 the git staging area instead of the working tree.
 
-### One-time setup: install the pre-commit hook
+The check is currently **manual** — there is no pre-commit hook,
+so nothing automatically blocks a non-compliant commit. Running
+`check-gpl3.sh` before `git commit` is your responsibility until
+the project has CI. When CI/CD lands (planned: GitHub Actions),
+the same script will run against pull requests and fail the build
+on violations.
 
-The hook lives in `.githooks/` (tracked in the repo, unlike
-`.git/hooks/`). Enable it once per clone with:
-
-```sh
-git config core.hooksPath .githooks
-```
-
-After that, `git commit` automatically runs `check-gpl3.sh --staged`
-and blocks commits that violate the rules. Skip the hook for a
-specific commit with `git commit --no-verify` — but only when you
-have a real reason to.
+No pre-commit hook is installed because `git config core.hooksPath`
+would silently bypass any future `bd hooks install` output (beads
+writes to `.git/hooks/` by default).
 
 ## Beads workflow
 
