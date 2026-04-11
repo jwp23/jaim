@@ -383,10 +383,43 @@ Config::generate_sandbox_profile()
   }
   // Strict mode: no home directory access by default (deny default handles it)
 
-  // CWD access - full read/write
+  // CWD access - full read/write, with the same mask exclusions as the
+  // home rule.  Seatbelt unions allow rules, so emitting an unscoped
+  // (allow file* (subpath CWD)) would nullify every mask whose full
+  // path sits inside CWD — casual-mode users running jaim from $HOME
+  // (the README's default pattern) would silently expose .ssh, .aws,
+  // .gnupg, shell histories, browser data, and every other masked
+  // path.  The require-not clauses fix the policy; the pre-check
+  // below refuses to start outright when CWD is itself inside a
+  // masked path, because in that case the require-not on the CWD
+  // subpath nullifies the rule entirely (chdir would fail and the
+  // user would see a confusing error) — better to fail early with
+  // clear guidance.
   if (grant_cwd_) {
-    p += std::format("(allow file* (subpath \"{}\"))\n",
-                     sbpl_escape(cwd().string()));
+    const auto &c = cwd();
+    for (const auto &m : mask_files_) {
+      auto masked = homepath_ / m;
+      if (contains(masked, c))
+        err("refusing to grant CWD access: {} is inside masked path {}.\n"
+            "  Use -D/--nocwd to disable CWD access, or cd to a different "
+            "directory.",
+            c.string(), masked.string());
+    }
+    if (mask_files_.empty()) {
+      p += std::format("(allow file* (subpath \"{}\"))\n",
+                       sbpl_escape(c.string()));
+    }
+    else {
+      p += "(allow file*\n";
+      p += "  (require-all\n";
+      p += std::format("    (subpath \"{}\")\n", sbpl_escape(c.string()));
+      for (const auto &m : mask_files_) {
+        auto masked = homepath_ / m;
+        p += std::format("    (require-not (subpath \"{}\"))\n",
+                         sbpl_escape(masked.string()));
+      }
+      p += "  ))\n";
+    }
   }
 
   // Granted directories
