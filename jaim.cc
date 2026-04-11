@@ -270,15 +270,17 @@ Config::generate_sandbox_profile()
 
   // Mode-specific home directory access
   if (mode_ == kCasual || mode_ == kBare) {
-    // Casual/Bare: read access to home directory, excluding masked paths.
+    // Casual: full access to home directory, excluding masked paths.
+    // Bare: read-only access to home directory, excluding masked paths.
     // Use require-all with require-not to properly exclude masked paths,
     // since Seatbelt's allow rules take precedence over later deny rules.
+    const char *access = mode_ == kCasual ? "file*" : "file-read*";
     if (mask_files_.empty()) {
-      p += std::format("(allow file-read* (subpath \"{}\"))\n",
-                       sbpl_escape(homepath_.string()));
+      p += std::format("(allow {} (subpath \"{}\"))\n",
+                       access, sbpl_escape(homepath_.string()));
     }
     else {
-      p += "(allow file-read*\n";
+      p += std::format("(allow {}\n", access);
       p += "  (require-all\n";
       p += std::format("    (subpath \"{}\")\n",
                        sbpl_escape(homepath_.string()));
@@ -522,8 +524,8 @@ Config::opt_parser(bool dotjail)
           err<Options::Error>(R"(invalid mode {})", m);
       },
       R"(Set execution mode to one of the following:
-    casual - sandbox with read access to home directory
-    bare - sandbox with read access to home but no sensitive files
+    casual - sandbox with full access to home directory
+    bare - sandbox with read access to home directory
     strict - sandbox with no home directory access)",
       "casual|bare|strict");
   opts(
