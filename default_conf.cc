@@ -163,6 +163,16 @@ mask .xonsh_history
 # matching the pattern.  If you want to undo any of these unsetenv
 # commands in a particular config file, you can use setenv to reverse
 # the effects of unsetenv.
+#
+# PRECEDENCE (read this before adding a setenv line to a config):
+# A later `setenv VAR=VALUE` in ANY included config file silently
+# overrides a previous `unsetenv VAR` or matching wildcard pattern,
+# and the variable is passed into the sandbox.  Expansion of ${VAR}
+# inside the value reads from the REAL environment at config-parse
+# time, so a line like `setenv ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`
+# defeats the *_API_KEY strip below and leaks your real token into
+# the sandbox.  jaim will warn (but not error) when a `setenv VAR=...`
+# in a config file overrides an unsetenv pattern.
 
 unsetenv *_ACCESS_KEY
 unsetenv *_APIKEY

@@ -467,6 +467,18 @@ descriptors will be scrubbed by default in sandboxes.
 
     If the argument contains `=`, then *var* is always treated as a
   variable, not a pattern, and it is assigned *value* in the jail.
+  This form unconditionally overrides any prior `--unsetenv` (or
+  matching wildcard pattern) for *var*: the variable is always
+  assigned in the sandbox regardless of the order relative to
+  `--unsetenv`.  Expansion of `${`*var*`}` inside *value* reads from
+  the real environment at config-parse time, so a line like `setenv
+  ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}` in a config file captures
+  the real token and leaks it into the sandbox — defeating the
+  default credential strip in `.defaults`.  When this happens inside
+  a configuration file, jaim emits a warning to stderr naming the
+  variable and the unsetenv pattern it overrode.  No warning is
+  emitted for `--setenv` on the command line: command-line flags
+  always reflect explicit user intent.
 
 `--storage` *dir*
 : Specify an alternate location in which to store private home

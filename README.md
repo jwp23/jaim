@@ -200,6 +200,26 @@ To view the built-in defaults:
 jaim --print-defaults
 ```
 
+### setenv/unsetenv precedence
+
+The built-in defaults include an `unsetenv` list that strips
+credentials (`*_API_KEY`, `*_TOKEN`, `DATABASE_URL`, etc.) from the
+sandbox environment. A `setenv VAR=VALUE` line in any config file
+(`.defaults`, `default.conf`, `<name>.conf`, etc.) **unconditionally
+overrides** any prior `unsetenv` for `VAR`, including matching
+wildcard patterns. In particular, a line like
+
+```
+setenv ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+```
+
+expands `${ANTHROPIC_API_KEY}` from the *real* environment at
+config-parse time and passes the token into the sandbox, silently
+defeating the default `*_API_KEY` strip. jaim will emit a warning
+to stderr whenever a `setenv VAR=...` in a config file overrides an
+`unsetenv` pattern (command-line `--setenv` never warns, since it
+reflects explicit user intent).
+
 ## Threat model
 
 jaim prevents **accidents**, not **attacks**. It is designed to stop

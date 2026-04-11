@@ -752,9 +752,26 @@ Config::opt_parser(bool dotjail)
       "--setenv",
       [this](std::string var) {
         if (auto pos = var.find('='); pos != var.npos) {
+          auto name = var.substr(0, pos);
           auto var_eq_val = std::format("{}{}", var.substr(0, pos + 1),
                                         expand(var.substr(pos + 1)));
-          setenv_.insert_or_assign(var.substr(0, pos), var_eq_val);
+          // setenv VAR=VALUE unconditionally overrides any prior unsetenv
+          // (including wildcard patterns that would otherwise have stripped
+          // VAR).  When this happens inside a config file, warn — it is
+          // almost certainly a footgun: `setenv FOO=${FOO}` captures the
+          // real-environment value of FOO at parse time and then feeds it
+          // into the sandbox, silently defeating the default credential
+          // strip.  The warning is suppressible by naming the variable
+          // outside any unsetenv pattern.
+          if (parsing_config_file_)
+            if (auto it = std::ranges::find_if(
+                    env_filter_,
+                    [&name](const auto &pat) { return glob(pat, name); });
+                it != env_filter_.end())
+              warn("warning: setenv {} overrides unsetenv {} — variable will "
+                   "be passed into the sandbox",
+                   name, *it);
+          setenv_.insert_or_assign(std::string(name), var_eq_val);
         }
         else if (auto it = env_filter_.find(var); it != env_filter_.end())
           env_filter_.erase(it);
