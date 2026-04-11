@@ -65,7 +65,11 @@ command source "${JAIM_SCRIPT:-/dev/null}"; "$0" "$@"
 # previously included default file.
 
 mask .jaim
-mask .ssh
+mask .ssh/id_rsa
+mask .ssh/id_ecdsa
+mask .ssh/id_ed25519
+mask .ssh/id_dsa
+mask .ssh/config
 mask .gnupg
 mask .local/share/keyrings
 mask .netrc
