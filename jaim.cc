@@ -741,9 +741,6 @@ do_main(int argc, char **argv)
   Config conf;
   conf.init_credentials();
 
-  // Compute and cache pwd.
-  setenv("PWD", conf.cwd().c_str(), 1);
-
   path opt_C = "";
   bool opt_C_optional{};
   bool opt_init{};
@@ -791,6 +788,10 @@ The default is CMD.conf if it exists, otherwise default.conf)",
     warn("{}", e.what());
     usage(2);
   }
+
+  // Compute and cache pwd after early-exit options (--help, --version)
+  // have been handled, since canonical() can fail under sandbox.
+  setenv("PWD", conf.cwd().c_str(), 1);
 
   ensure_file(conf.home_jaim(true), ".defaults", jaim_defaults, 0600,
               create_warn);
