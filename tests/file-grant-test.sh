@@ -63,7 +63,7 @@ cat > "$TEST_CONF" <<EOF
 conf default.conf
 mode casual
 # Grant this specific file; atomic-write temp siblings come along
-# automatically per the `file` directive's regex.
+# automatically per the file directive regex.
 file $GRANT_FILE
 # Add a new mask so the mask regression check has something specific
 # to test that was not already masked by the default list.
@@ -195,14 +195,12 @@ echo "==> file-grant: masked files remain denied (mask regression)"
 
 # 9. The test config adds a mask for $MASKED_FILE.  Reads to it via
 #    jaim must fail with EPERM, same as the default mask list.
+#    (The ~/.ssh deny-by-default is separately regression-tested by
+#    ssh-mask-bypass-test.sh, which seeds real files; probing a
+#    non-existent ~/.ssh path from this test would return ENOENT
+#    not EPERM and produce a false negative.)
 expect_denied_eperm "read masked file" \
   /bin/cat "$MASKED_FILE"
-
-# 10. The default ~/.ssh mask (ja-10e) still holds.  We pick a
-#     filename that will never exist, so this also exercises the
-#     deny-by-default carve-out for ~/.ssh.
-expect_denied_eperm "read masked ~/.ssh file" \
-  /bin/cat "$HOME/.ssh/jaim-file-grant-probe-$$"
 
 echo "==> shipped claude.conf preset is parseable and grants .claude.json"
 
