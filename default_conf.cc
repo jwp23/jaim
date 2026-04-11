@@ -46,9 +46,11 @@ const std::string jaim_defaults =
 
 # The default mode is strict.  A strict sandbox denies all access to
 # your home directory except the current working directory and any
-# explicitly granted directories.  A casual sandbox allows full access
-# to your home directory but masks sensitive files.  Bare mode allows
-# only read access to the home directory with the same masks.
+# explicitly granted directories.  A casual sandbox allows read-only
+# access to your home directory with sensitive files masked.  Bare
+# mode is equivalent to casual on jaim (macOS has no overlay file
+# system to distinguish them the way jai does on Linux).  Writes to
+# the home directory should be granted explicitly with --dir.
 # Uncomment any of the following to set the mode, or override it in
 # individual .jail files:
 

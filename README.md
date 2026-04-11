@@ -168,6 +168,16 @@ Run Claude Code with access to an extra directory:
 jaim -d ~/data claude
 ```
 
+Grant writable access to a specific state directory under `$HOME`.
+Because casual mode makes `$HOME` read-only, tools that need to
+persist state outside the current working directory (for example
+`~/.claude`, `~/.config/something`) must have that directory
+explicitly granted:
+
+```sh
+jaim -d ~/.claude claude
+```
+
 Run in strict mode with no home directory access:
 
 ```sh
