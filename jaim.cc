@@ -231,6 +231,31 @@ sbpl_escape(const std::string &s)
   return ret;
 }
 
+// Escape a path so it can be embedded literally inside a Seatbelt
+// regex.  Metacharacters get a backslash prefix so the path matches
+// only itself, not whatever pattern the character would otherwise
+// mean.  Seatbelt's #"..." regex literal is a raw string (backslashes
+// pass through to the regex engine unchanged) so the caller only has
+// to escape embedded quotes separately.
+static std::string
+sbpl_regex_escape(const std::string &s)
+{
+  std::string ret;
+  ret.reserve(s.size() * 2);
+  for (char c : s) {
+    switch (c) {
+    case '.': case '*': case '+': case '?': case '^': case '$':
+    case '(': case ')': case '[': case ']': case '{': case '}':
+    case '|': case '\\':
+      ret += '\\';
+      [[fallthrough]];
+    default:
+      ret += c;
+    }
+  }
+  return ret;
+}
+
 std::string
 Config::generate_sandbox_profile()
 {
@@ -313,6 +338,43 @@ Config::generate_sandbox_profile()
       p += "  ))\n";
     }
     p += "\n";
+
+    // SSH allow-list carve-outs: when the entire ~/.ssh tree is masked
+    // (the default, see default_conf.cc), re-allow the specific files
+    // that SSH clients and related tooling normally need.  Deny-by-
+    // default under ~/.ssh keeps privately-named key files out of
+    // reach regardless of their naming convention; enumerating denies
+    // does not.
+    if (mask_files_.contains(path(".ssh"))) {
+      auto ssh = homepath_ / ".ssh";
+      auto ssh_str = sbpl_escape(ssh.string());
+      // SSH agent sockets (directory subpath so the whole agent dir
+      // including per-session sockets is reachable).
+      p += std::format("(allow {} (subpath \"{}/agent\"))\n",
+                       access, ssh_str);
+      // Host key database.
+      p += std::format("(allow {} (literal \"{}/known_hosts\"))\n",
+                       access, ssh_str);
+      p += std::format("(allow {} (literal \"{}/known_hosts.old\"))\n",
+                       access, ssh_str);
+      // Public keys — readable from sandboxed tooling (git, ssh-add
+      // -L, etc.), but not writable, since modifying a .pub file
+      // does not require sandbox write access.  Seatbelt's #"..."
+      // regex literal is a raw string: backslashes pass through to
+      // the regex engine unchanged, so we emit single backslashes
+      // only.  Quotes inside the regex still have to be escaped.
+      auto pub_regex = std::format("^{}/[^/]+\\.pub$",
+                                   sbpl_regex_escape(ssh.string()));
+      std::string pub_regex_quoted;
+      for (char c : pub_regex) {
+        if (c == '"')
+          pub_regex_quoted += '\\';
+        pub_regex_quoted += c;
+      }
+      p += std::format("(allow file-read* (regex #\"{}\"))\n",
+                       pub_regex_quoted);
+      p += "\n";
+    }
   }
   // Strict mode: no home directory access by default (deny default handles it)
 

@@ -85,11 +85,14 @@ command source "${JAIM_SCRIPT:-/dev/null}"; "$0" "$@"
 # previously included default file.
 
 mask .jaim
-mask .ssh/id_rsa
-mask .ssh/id_ecdsa
-mask .ssh/id_ed25519
-mask .ssh/id_dsa
-mask .ssh/config
+# The entire ~/.ssh directory is denied by default so that private
+# keys with any naming convention (id_ed25519_work, google_compute_engine,
+# etc.) are blocked automatically.  jaim then allow-lists the specific
+# files most SSH clients need: agent sockets under ~/.ssh/agent/*,
+# known_hosts, known_hosts.old, and *.pub public keys.  If you need
+# additional files accessible, grant them explicitly with --dir or
+# use `unmask .ssh` to remove the blanket protection.
+mask .ssh
 mask .gnupg
 mask .local/share/keyrings
 mask .netrc
