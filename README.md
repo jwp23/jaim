@@ -73,18 +73,20 @@ The included `GNUmakefile` builds jaim without autotools:
 
 ```sh
 make
+make install
 ```
 
-To install to `/usr/local/bin`:
+This installs to `~/.local/bin` by default (no `sudo` required).
+Make sure `~/.local/bin` is in your `PATH`:
 
 ```sh
-sudo make install
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-To install elsewhere:
+To install to a different prefix:
 
 ```sh
-make PREFIX=$HOME/.local install
+make PREFIX=/usr/local install   # requires sudo
 ```
 
 ### Autotools build

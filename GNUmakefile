@@ -3,7 +3,7 @@
 CXX ?= c++
 CXXFLAGS ?= -O2
 CXXFLAGS += -std=gnu++23 -Wall -Wextra
-PREFIX ?= /usr/local
+PREFIX ?= $(HOME)/.local
 
 SRCS = complete.cc cred.cc default_conf.cc fs.cc jaim.cc options.cc
 OBJS = $(SRCS:.cc=.o)
