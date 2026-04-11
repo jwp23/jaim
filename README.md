@@ -1,51 +1,218 @@
-![](./logo.svg "JAI logo")
+![](./logo.svg "jaim logo")
 
-# JAI - An ultra lightweight jail for AI CLIs on modern linux
+# jaim - A lightweight sandbox for AI CLIs on macOS
 
-`jai` strives to be the easiest container in the world to
-configure--so easy that you never again need to run a code assistant
-without protection.  It's not a substitute for
-[docker](https://www.docker.com/) or [podman](https://podman.io/) when
-you need better isolation.  But if you regularly do risky things like
-run an AI CLI with your own privileges in your home directory on a
-computer that you care about, then `jai` could reduce the damage when
-things go wrong.
+`jaim` is a macOS port of [jai](https://jai.scs.stanford.edu), an
+ultra-lightweight jail for AI command-line tools. It uses macOS
+[Seatbelt](https://reverse.put.as/wp-content/uploads/2011/09/Apple-Sandbox-Guide-v1.0.pdf)
+sandbox profiles to restrict what sandboxed processes can access, so you
+can run AI assistants without giving them free rein over your system.
 
-`jai` *command* runs *command* with the following policy:
+`jaim` *command* runs *command* with the following default policy:
 
-* *command* has complete access to the current working directory.
+* *command* has full read/write access to the current working directory.
 
-* *command* has copy-on-write access to the rest of your home
-  directory.  It can write there to store dot files, but the changes
-  will be kept separate in a `changes` directory and will not actually
-  modify your real home directory.
+* In **casual** mode (the default), *command* has read-only access to
+  your home directory, with sensitive files masked (SSH keys, cloud
+  credentials, browser data, shell history, etc.).
 
-* */tmp* and */var/tmp* are private.
+* In **bare** mode, *command* has read-only access to your home
+  directory with a similar set of masked files.
 
-* The rest of the file system is read only (though devices are still
-  accessible).
+* In **strict** mode, *command* has no access to your home directory
+  at all, except the current working directory and any explicitly
+  granted paths.
 
-With command-line options or configuration, `jai` supports the
-following:
+* `/tmp` and system temp directories are writable.
 
-* A "strict" mode where jailed processes start with an empty home
-  directory and a different user id, so can read fewer sensitive
-  files.
+* The rest of the filesystem is read-only.
 
-* The ability to grant access to other directories besides your
-  current working directory.
+* Network access is unrestricted.
 
-* Multiple named sandboxed home directories that do not see each
-  other's changes.
+* Sensitive environment variables (tokens, passwords, API keys) are
+  stripped automatically.
 
-* Per-command configuration files.
+## Features
 
-jai emphasizes security over portability.  It heavily leverages modern
-linux APIs to isolate processes and avoid time-of-check-to-time-of-use
-race conditions.  It will not work with kernels older than 6.13 or
-operating systems other than linux.
+* **Three security modes** -- casual, bare, and strict -- to balance
+  convenience and isolation.
 
-See the [home page](https://jai.scs.stanford.edu) or the [man
-page](jai.1.md) for more documentation.
+* **Named sandboxes** -- multiple independent sandbox configurations
+  that don't see each other's state.
 
-See the [INSTALL](INSTALL) file for installation instructions.
+* **Directory grants** -- grant read-only or full access to additional
+  directories with `--dir`, `--rdir`, and related options.
+
+* **File masking** -- deny access to specific paths within your home
+  directory (`.ssh`, `.aws`, `.gnupg`, etc.) even in casual mode.
+
+* **Environment filtering** -- automatically strips credentials and
+  secrets from the sandboxed environment. Configurable with
+  `--setenv` and `--unsetenv`.
+
+* **Per-command configuration** -- configuration files in
+  `~/.jaim/<command>.conf` let you set different policies for
+  different tools.
+
+* **Shell scripting** -- source custom bash functions into sandboxed
+  shells via `~/.jaim/.jaimrc`.
+
+* **No root required** -- unlike the Linux version, jaim uses the
+  unprivileged macOS sandbox API.
+
+## Requirements
+
+* macOS on Apple Silicon (arm64)
+* A C++ compiler with C++23 support (Xcode 16+ / Apple Clang 18+)
+
+## Building and installing
+
+### Quick build (recommended)
+
+The included `GNUmakefile` builds jaim without autotools:
+
+```sh
+make
+```
+
+To install to `/usr/local/bin`:
+
+```sh
+sudo make install
+```
+
+To install elsewhere:
+
+```sh
+make PREFIX=$HOME/.local install
+```
+
+### Autotools build
+
+If you prefer the autotools workflow:
+
+```sh
+./autogen.sh    # only from a git checkout
+./configure
+make
+make install
+```
+
+### First run
+
+After building, initialize your configuration:
+
+```sh
+./jaim --init
+```
+
+This creates `~/.jaim/` with default configuration files (`.defaults`,
+`default.conf`, `default.jail`, `.jaimrc`). You can edit these to
+customize the sandbox behavior.
+
+## Usage
+
+Run a command inside the sandbox:
+
+```sh
+jaim claude
+jaim bash
+jaim your-ai-tool --some-flag
+```
+
+Run with no arguments to get a sandboxed shell:
+
+```sh
+jaim
+```
+
+### Common options
+
+```
+-m, --mode casual|bare|strict   Set the sandbox mode
+-d, --dir DIR                   Grant full access to DIR
+-r, --rdir DIR                  Grant read-only access to DIR
+-j, --jail NAME                 Use a named sandbox
+-D, --nocwd                     Don't grant access to the current directory
+-C, --conf FILE                 Use a specific configuration file
+    --mask FILE                 Deny access to $HOME/FILE
+    --unmask FILE               Undo a previous --mask
+    --setenv VAR[=VALUE]        Set an environment variable
+    --unsetenv VAR              Remove an environment variable (supports wildcards)
+    --help                      Show full help
+    --version                   Show version information
+```
+
+### Examples
+
+Run Claude Code with access to an extra directory:
+
+```sh
+jaim -d ~/data claude
+```
+
+Run in strict mode with no home directory access:
+
+```sh
+jaim -m strict bash
+```
+
+Use a named sandbox to keep state separate:
+
+```sh
+jaim -j project-a claude
+jaim -j project-b claude
+```
+
+## Configuration
+
+Configuration lives in `~/.jaim/` (or `$JAIM_CONFIG_DIR`):
+
+| File              | Purpose                                      |
+|-------------------|----------------------------------------------|
+| `.defaults`       | Base defaults included by other config files  |
+| `default.conf`    | Default configuration (includes `.defaults`)  |
+| `default.jail`    | Default sandbox settings (mode, etc.)         |
+| `.jaimrc`         | Bash functions available in sandboxed shells  |
+| `<name>.conf`     | Per-command configuration                     |
+| `<name>.jail`     | Per-sandbox settings                          |
+
+To view the built-in defaults:
+
+```sh
+jaim --print-defaults
+```
+
+## How it works
+
+jaim uses the macOS Seatbelt sandbox (`sandbox_init(3)`) to enforce
+file access restrictions. When you run `jaim command`:
+
+1. jaim reads your configuration files to determine the sandbox mode,
+   granted directories, masked files, and environment filters.
+
+2. It generates a Seatbelt profile -- a set of allow/deny rules in
+   Apple's Scheme-like sandbox profile language -- based on your
+   configuration.
+
+3. It forks a child process, applies the sandbox profile with
+   `sandbox_init()`, sets up the environment, and execs the command.
+
+4. The parent process waits for the child and propagates its exit
+   status.
+
+The sandbox is enforced by the kernel. Once applied, a process cannot
+escape it or weaken its restrictions. Unlike containers or VMs, there
+is no filesystem overhead -- jaim processes see the real filesystem,
+just with access restrictions enforced by the kernel.
+
+## Credits
+
+jaim is a macOS port of [jai](https://jai.scs.stanford.edu) by David
+Mazieres. The original jai targets modern Linux (kernel 6.13+) and
+uses namespaces and overlayfs for isolation. jaim replaces those
+Linux-specific mechanisms with macOS Seatbelt sandbox profiles.
+
+## License
+
+GNU General Public License v3 or later. See [COPYING](COPYING).
