@@ -18,6 +18,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Modified 2026 by Joseph Presley: port from Linux to macOS arm64.
+ * Modified 2026 by Joseph Presley: add --file directive and claude.conf
+ *   preset for coding-agent support (ja-ofy).
  */
 
 #pragma once

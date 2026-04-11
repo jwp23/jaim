@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Joseph Presley
 #
 # Regression test for ja-ofy: casual mode correctly makes $HOME
 # read-only (per ja-x9q) but coding agents like Claude Code need to
