@@ -3,3 +3,5 @@ This program was hand-written by David Mazieres.
 The tests were written by AI.
 
 The macOS arm64 port (jaim) was written by Joseph Presley with Claude.
+
+Most of the port was orchestrated through Gas City by Steve Yegge.
