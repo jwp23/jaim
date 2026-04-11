@@ -252,6 +252,12 @@ Config::generate_sandbox_profile()
   p += "  (literal \"/tmp\")\n";
   p += "  (literal \"/var\"))\n\n";
 
+  // Allow read/write to /dev/null, /dev/tty, and PTY devices
+  p += "(allow file* (literal \"/dev/null\"))\n";
+  p += "(allow file* (literal \"/dev/tty\"))\n";
+  p += "(allow file* (regex #\"^/dev/ttys[0-9]+$\"))\n";
+  p += "(allow file* (literal \"/dev/ptmx\"))\n\n";
+
   // Allow writing to temp directories
   p += "(allow file* (subpath \"/private/tmp\"))\n";
   p += "(allow file* (subpath \"/tmp\"))\n";
