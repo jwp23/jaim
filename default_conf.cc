@@ -102,7 +102,12 @@ mask .azure
 mask .config/gcloud
 mask .config/gh
 mask .config/Keybase
-mask .config/kube
+# kubectl's default kubeconfig is ~/.kube/config, not ~/.config/kube
+# — the Linux XDG-style path here was a miss.  Mask the whole ~/.kube
+# directory so kubeconfig, cache/, and any tool-specific state under
+# it are all denied; tools wanting a different path can use
+# $KUBECONFIG (which is stripped by the unsetenv list below).
+mask .kube
 mask .docker
 mask .password-store
 # Credential-bearing files for common developer toolchains.  Each of
