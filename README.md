@@ -120,7 +120,7 @@ make install
 After building, initialize your configuration:
 
 ```sh
-./jaim --init
+jaim --init
 ```
 
 This creates `~/.jaim/` with default configuration files (`.defaults`,
