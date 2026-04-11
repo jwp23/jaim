@@ -1,4 +1,4 @@
-![](./logo.svg "jaim logo")
+![](./logo.png "jaim logo")
 
 # jaim - A lightweight sandbox for AI CLIs on macOS
 
