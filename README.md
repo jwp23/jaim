@@ -8,6 +8,11 @@ ultra-lightweight jail for AI command-line tools. It uses macOS
 sandbox profiles to restrict what sandboxed processes can access, so you
 can run AI assistants without giving them free rein over your system.
 
+**NOTE**: THIS IS STILL VERY EXPERIMENTAL. USE AT YOUR OWN RISK
+With that said, I believe this is at a point of usefulness where having
+adventural individuals take it for a test run is beneficial for feedback
+and community building purposes.
+
 `jaim` *command* runs *command* with the following default policy:
 
 * *command* has full read/write access to the current working directory.
