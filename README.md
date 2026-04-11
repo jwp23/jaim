@@ -8,10 +8,30 @@ ultra-lightweight jail for AI command-line tools. It uses macOS
 sandbox profiles to restrict what sandboxed processes can access, so you
 can run AI assistants without giving them free rein over your system.
 
-**NOTE**: THIS IS STILL VERY EXPERIMENTAL. USE AT YOUR OWN RISK
+## Notes/Warnings
+
+### Warning
+
+THIS IS STILL VERY EXPERIMENTAL. USE AT YOUR OWN RISK
+
 With that said, I believe this is at a point of usefulness where having
 adventural individuals take it for a test run is beneficial for feedback
 and community building purposes.
+
+I tested casual mode but as https://github.com/jwp23/jaim/issues/1 mentions
+changes to modes need to be updated.  Casual actually acts like jai's strict.
+As such, reconciling this may produce breaking changes. Such changes will be noted.
+
+### Note
+This was created using jai's code as a starting point and using this project
+to test Steve Yegge's [Gas City](https://github.com/gastownhall/gascity).
+
+My part of the code was created through agentic engineering using Gas City.
+Feedback on quality is welcome.
+
+I will do my best to keep up with the changes made in the jai project.
+
+## Use
 
 `jaim` *command* runs *command* with the following default policy:
 
