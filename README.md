@@ -200,6 +200,48 @@ To view the built-in defaults:
 jaim --print-defaults
 ```
 
+## Threat model
+
+jaim prevents **accidents**, not **attacks**. It is designed to stop
+an AI tool from damaging your system through bugs or careless commands
+-- not to contain a deliberately malicious or prompt-injected agent.
+
+**What jaim protects against:**
+
+* An agent running `rm -rf` in the wrong place.
+* Unintended writes outside the current working directory (for example
+  to `~/.bashrc` or `~/.ssh/config`).
+* Reads of masked sensitive files (SSH keys, cloud credentials,
+  browser data, shell history).
+
+**What jaim does NOT protect against:**
+
+* **Data exfiltration over the network.** Network access is
+  unrestricted in every mode, including `strict`. Anything an agent
+  can read -- the current working directory, git history, unmasked
+  parts of your home directory -- it can POST to any host on the
+  internet. Seatbelt does not block outbound connections, and jaim
+  does not currently emit `(deny network*)` rules.
+* **A compromised or prompt-injected agent.** If an agent decides to
+  ship the contents of your working directory to an attacker, no jaim
+  mode will stop it.
+* **Secrets in the current working directory.** jaim grants full
+  read/write access to the CWD. Anything sitting there -- `.env`
+  files, API tokens, credentials in sibling git repos -- is readable
+  by the agent and therefore exfiltratable.
+
+### Recommendations for untrusted agents
+
+* Use `strict` mode to deny all home directory access.
+* Run jaim from a directory that contains only what the agent needs.
+  Do not point jaim at a directory that holds secrets, credentials,
+  or unrelated git repos.
+* Add an outbound firewall (Little Snitch, LuLu, or pf rules) if you
+  need containment against network exfiltration. jaim does not
+  currently expose a flag to deny network.
+* Treat jaim as a seatbelt, not a vault. For adversarial AI workloads,
+  a VM or a separate user account gives stronger isolation.
+
 ## How it works
 
 jaim uses the macOS Seatbelt sandbox (`sandbox_init(3)`) to enforce
