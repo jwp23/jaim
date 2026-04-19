@@ -41,14 +41,21 @@ I will do my best to keep up with the changes made in the jai project.
   your home directory, with sensitive files masked (SSH keys, cloud
   credentials, browser data, shell history, etc.).
 
-* In **bare** mode, *command* has read-only access to your home
-  directory with a similar set of masked files.
+* In **bare** mode, *command* sees an empty private home directory at
+  `~/.jaim/<jail>.home/` instead of your real home; the real home is
+  denied entirely by the sandbox. The private home is writable and
+  persists across invocations, so tool state (shell history, session
+  caches) is retained. Useful for running a tool with your user
+  credentials but with no ambient dotfiles, history, or config
+  bleeding through from the real home.
 
 * In **strict** mode, *command* has no access to your home directory
   at all, except the current working directory and any explicitly
   granted paths.
 
-* `/tmp` and system temp directories are writable.
+* `/tmp` is a fresh private directory per invocation: the shared
+  system `/tmp`/`/private/tmp` is denied, `TMPDIR` is set to the
+  private dir, and the dir is removed when jaim exits.
 
 * The rest of the filesystem is read-only.
 
@@ -322,6 +329,18 @@ an AI tool from damaging your system through bugs or careless commands
   to `~/.bashrc` or `~/.ssh/config`).
 * Reads of masked sensitive files (SSH keys, cloud credentials,
   browser data, shell history).
+* Inherited file descriptors smuggling sandbox-bypassing access into
+  the sandboxed program. jaim enumerates the child's open descriptors
+  with `proc_pidinfo` and closes everything above stderr before
+  `execve`, so a caller that opened a file outside the sandbox cannot
+  hand that FD to the sandboxed program as a back door around the
+  path-based sandbox rules.
+* Cross-sandbox or unsandboxed-to-sandbox leaks through `/tmp`. Each
+  jaim invocation gets a fresh private scratch directory and the
+  shared system `/tmp` / `/private/tmp` / `/var/folders` trees are
+  denied, so sandboxed processes cannot read files dropped by
+  concurrent sandboxes or by unsandboxed processes, nor leave files
+  there for anyone else to pick up after exit.
 
 **What jaim does NOT protect against:**
 

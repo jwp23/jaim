@@ -51,12 +51,18 @@ will not be able to read sensitive files that require your user ID or
 group IDs (assuming you don't add `jai` to any supplemental groups,
 which would be a strange thing to do).
 
-Strict mode does not let you grant access to NFS file systems.  If
-your home directory is on NFS, you can instead use bare mode with `jai
--mbare`.  Bare mode hides your entire home directory like strict mode,
-but it runs jailed software with your user credentials, and hence
-allows jailed software to use your credentials to read any sensitive
-files you have access to outside your home directory.
+Bare mode is an alternative that hides your entire home directory,
+like strict mode, but runs jailed software with your user
+credentials.  In jaim (the macOS port), bare mode creates an empty
+private home directory at `$JAIM_CONFIG_DIR/`*name*`.home/`, rewrites
+`$HOME` inside the sandbox to point at that directory, and leaves
+your real home denied by the default-deny sandbox rule.  The private
+home is writable and persists across invocations so tool state
+(shell history, per-user caches) is retained between runs; `jaim
+-u` removes it during teardown.  Because bare mode runs with your
+user credentials, jailed software can still read sensitive files
+you have access to **outside** your home directory; use strict
+mode when you also need to deny that.
 
 Note that all modes use a private PID namespace, so jailed software
 cannot kill or ptrace processes outside of the jail.  Moreover, all
@@ -404,9 +410,14 @@ descriptors will be scrubbed by default in sandboxes.
   jail.
 
     Bare mode uses an empty directory like strict mode, but runs with
-  the invoking user's credentials.  It is inferior to strict mode, but
-  can be used for NFS-mounted home directories since NFS does not
-  support id-mapped mounts.
+  the invoking user's credentials.  In jaim, the empty home lives at
+  `$JAIM_CONFIG_DIR/`*name*`.home/` and `$HOME` inside the sandbox is
+  rewritten to that path; the real home is denied by the sandbox and
+  is not reachable via the usual `$HOME`/`~` paths.  The private
+  home persists across invocations so shell history and tool caches
+  survive between runs.  Bare mode is inferior to strict mode for
+  confidentiality, since jailed software can still read files
+  outside your home directory that are accessible to your user.
 
 `-j` *name*, `--jail` *name*
 : jai allows you to have multiple jailed home directories, which may
@@ -697,6 +708,37 @@ variables or command-line options:
 `/run/jai/$USER/tmp/.run/default`, `/run/jai/$USER/tmp/.run/`*name*
 : Outside a sandbox, these paths provide access to `/run/user/$UID`
   inside either the default sandbox or the one named *name*.
+
+# SECURITY NOTES
+
+Regardless of mode, jaim applies the following defenses on every
+invocation:
+
+**Private /tmp.**  jaim creates a fresh temp directory for each
+invocation under the system `$TMPDIR`, points the sandboxed
+process's `TMPDIR` at that directory, and denies the shared
+`/tmp`, `/private/tmp`, and `/var/folders` trees in the Seatbelt
+profile.  Sandboxed processes cannot read scratch files dropped by
+concurrent sandboxes or by unsandboxed processes on the same host,
+and files written to `$TMPDIR` inside the sandbox are removed when
+jaim exits.  A user-supplied `TMPDIR` (either exported or set via
+`--setenv`) is overridden: the sandbox denies writes elsewhere, so
+honoring it would just break programs that honor `$TMPDIR`.
+
+**Inherited file-descriptor scrubbing.**  Between applying the
+sandbox profile and `execve`, the child enumerates its own open
+file descriptors via `proc_pidinfo(PROC_PIDLISTFDS)` and closes
+every descriptor above stderr.  The macOS sandbox enforces access
+on path-based syscalls, so a descriptor the parent opened outside
+the sandbox would bypass the profile entirely if inherited; the
+scrub removes that back door.  stdin, stdout, and stderr stay
+open so the child can still talk to the invoking tty.
+
+Neither of these defenses prevents a sandboxed program from
+exfiltrating data it can read: network access is unrestricted in
+every mode, and jaim makes no attempt to deny outbound
+connections.  Use strict mode, an outbound firewall, or a VM when
+stronger containment is required.
 
 # BUGS
 
