@@ -46,6 +46,10 @@
  *   directories (all, or just the one selected by -j) and any
  *   stray per-invocation private tmp directories a prior
  *   signal-killed jaim left in the system TMPDIR (ja-8bh).
+ * Modified 2026 by Joseph Presley: add --setup-user and
+ *   --remove-user one-shot flags that create/remove the _jaim
+ *   system account used by strict-mode UID separation; both
+ *   require root (ja-du9).
  */
 
 #include "jaim.h"
@@ -1258,6 +1262,8 @@ do_main(int argc, char **argv)
   bool opt_C_optional{};
   bool opt_init{};
   bool opt_u{};
+  bool opt_setup_user{};
+  bool opt_remove_user{};
 
   auto opts = conf.opt_parser();
   (*opts)(
@@ -1269,6 +1275,17 @@ do_main(int argc, char **argv)
 home directories ($JAIM_CONFIG_DIR/<jail>.home/) and any stray
 private tmp directories left behind by prior invocations.  With
 -j NAME, only that jail is cleaned.)");
+  (*opts)(
+      "--setup-user", [&] { opt_setup_user = true; },
+      R"(Create the _jaim system user (uid < 500, home /var/empty,
+shell /usr/bin/false) via dscl, then exit.  Required once per
+host before strict-mode UID separation can drop privileges.
+Must be run as root (e.g. sudo jaim --setup-user).  Idempotent.)");
+  (*opts)(
+      "--remove-user", [&] { opt_remove_user = true; },
+      R"(Remove the _jaim system user and its primary group via
+dscl, then exit.  Must be run as root.  Idempotent: succeeds
+whether the account is present or not.)");
   (*opts)(
       "-C", "--conf",
       [&](path p) {
@@ -1322,6 +1339,23 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   // sandbox_name_ if the user wants a single-jail scope.
   if (opt_u) {
     conf.teardown();
+    return 0;
+  }
+
+  // --setup-user / --remove-user are host-scoped, root-only, early-
+  // exit actions that mutate system account records via dscl.  They
+  // intentionally run before ensure_file so a fresh install can set
+  // up the _jaim account before ~/.jaim exists.  Mutually exclusive:
+  // choosing both is almost certainly a mistake, so reject it early
+  // rather than silently preferring one.
+  if (opt_setup_user && opt_remove_user)
+    err<Options::Error>("--setup-user and --remove-user are mutually exclusive");
+  if (opt_setup_user) {
+    setup_jaim_user();
+    return 0;
+  }
+  if (opt_remove_user) {
+    remove_jaim_user();
     return 0;
   }
 

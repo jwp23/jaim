@@ -18,6 +18,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Modified 2026 by Joseph Presley: port from Linux to macOS arm64.
+ * Modified 2026 by Joseph Presley: add kJaimSystemUser, get_jaim_user()
+ *   lookup, and setup_jaim_user/remove_jaim_user declarations backing
+ *   --setup-user and --remove-user (ja-du9).
  */
 
 #pragma once
@@ -88,6 +91,13 @@ template<typename Ent, auto IdFn, auto NamFn> struct DbEnt {
 using PwEnt = DbEnt<passwd, getpwuid_r, getpwnam_r>;
 using GrEnt = DbEnt<group, getgrgid_r, getgrnam_r>;
 
+// Dedicated unprivileged system user that strict mode drops privileges
+// into before launching the sandboxed child.  The name is kept here
+// rather than hardcoded at each callsite so the setup/remove helpers
+// and the future strict-mode UID-separation code (ja-txx) agree on
+// what to create, remove, and look up.
+inline constexpr char kJaimSystemUser[] = "_jaim";
+
 struct Credentials {
   uid_t uid_ = -1;
   gid_t gid_ = -1;
@@ -100,6 +110,11 @@ struct Credentials {
 
   static Credentials get_user(const struct passwd *pw);
   static Credentials get_user(const PwEnt &e) { return get_user(e.get()); }
+  // Look up the _jaim system user.  Returns a falsy Credentials (uid_
+  // == -1) if the user is not in the password database — callers that
+  // require the user present must check and report with a pointer to
+  // --setup-user.
+  static Credentials get_jaim_user();
   static Credentials get_effective()
   {
     return Credentials{
@@ -122,6 +137,22 @@ struct Credentials {
   friend bool operator==(const Credentials &,
                          const Credentials &) noexcept = default;
 };
+
+// Create the _jaim system user (and its primary group) via dscl.
+// Requires euid == 0; throws otherwise.  Idempotent: a successful
+// return leaves the user present, whether this call created it or
+// found it already there.  The UID and GID are picked from the
+// macOS system range (< 500) by scanning for unused values.  Home
+// directory is /var/empty, shell is /usr/bin/false, so the account
+// cannot log in interactively and has no writable home.
+void setup_jaim_user();
+
+// Remove the _jaim system user and its primary group via dscl.
+// Requires euid == 0; throws otherwise.  Idempotent: succeeds
+// whether the user/group was present or not.  The records are the
+// only persistent state jaim's setup creates on the host, so this
+// is the full uninstall for that piece.
+void remove_jaim_user();
 
 template<>
 struct std::formatter<Credentials> : std::formatter<std::string_view> {

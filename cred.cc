@@ -17,6 +17,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Modified 2026 by Joseph Presley: port from Linux to macOS arm64.
+ * Modified 2026 by Joseph Presley: add get_jaim_user() lookup helper
+ *   for the _jaim system user (ja-du9).
  */
 
 #include "cred.h"
@@ -67,6 +69,14 @@ Credentials::show() const
     }
   }
   return ret;
+}
+
+Credentials
+Credentials::get_jaim_user()
+{
+  if (PwEnt pw = PwEnt::get_nam(kJaimSystemUser))
+    return get_user(pw);
+  return {};
 }
 
 Credentials
