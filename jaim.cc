@@ -29,6 +29,11 @@
  * Modified 2026 by Joseph Presley: scrub inherited file descriptors
  *   above stderr in the child before execve so callers cannot leak
  *   sandbox-bypassing FDs into the sandboxed program (ja-oa7).
+ * Modified 2026 by Joseph Presley: replace blanket (allow process*)
+ *   /(allow signal) in the SBPL profile with targeted rules that
+ *   allow process-exec/fork, deny process-info-listpids/pidinfo/
+ *   pidfdinfo, and restrict remaining process-info and signal to
+ *   (target self) (ja-7c7).
  * Modified 2026 by Joseph Presley: replace blanket (allow mach*)
  *   with an explicit mach-bootstrap/mach-register/mach-task-name
  *   allow and a mach-lookup allow-list scoped to Apple's standard
@@ -285,9 +290,24 @@ Config::generate_sandbox_profile()
   p += "(version 1)\n";
   p += "(deny default)\n\n";
 
-  // Basic process operations
-  p += "(allow process*)\n";
-  p += "(allow signal)\n";
+  // Basic process operations.  Allow exec/fork freely, but restrict
+  // process-info and signal to self so the sandbox cannot enumerate
+  // or signal processes outside it.  SBPL treats a specific allow
+  // with a (target self) filter as more specific than a plain deny
+  // of the same subtype, so we enumerate the allowed self-targeted
+  // subtypes before the catch-all denies.  process-info-listpids
+  // has no per-target form (it enumerates every pid on the host),
+  // so it is simply denied.  This mirrors Apple's own appsandbox
+  // pattern in /System/Library/Sandbox/Profiles/appsandbox-common.sb.
+  p += "(allow process-exec*)\n";
+  p += "(allow process-fork)\n";
+  p += "(allow process-info-pidinfo (target self))\n";
+  p += "(allow process-info-pidfdinfo (target self))\n";
+  p += "(allow process-info-codesignature)\n";
+  p += "(deny process-info-listpids)\n";
+  p += "(deny process-info-pidinfo)\n";
+  p += "(deny process-info-pidfdinfo)\n";
+  p += "(allow signal (target self))\n";
   p += "(allow sysctl-read)\n\n";
 
   // Mach IPC.  The blanket (allow mach*) from the original port
