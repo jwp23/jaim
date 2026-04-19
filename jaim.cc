@@ -19,6 +19,9 @@
  * Modified 2026 by Joseph Presley: port from Linux to macOS arm64.
  * Modified 2026 by Joseph Presley: add --file directive and claude.conf
  *   preset for coding-agent support (ja-ofy).
+ * Modified 2026 by Joseph Presley: private per-invocation temp dir
+ *   replaces blanket /tmp and /private/tmp allow rules; TMPDIR is
+ *   rewritten in the sandboxed env (ja-4fk).
  */
 
 #include "jaim.h"
@@ -307,14 +310,17 @@ Config::generate_sandbox_profile()
   p += "(allow file* (regex #\"^/dev/ttys[0-9]+$\"))\n";
   p += "(allow file* (literal \"/dev/ptmx\"))\n\n";
 
-  // Allow writing to temp directories
-  p += "(allow file* (subpath \"/private/tmp\"))\n";
-  p += "(allow file* (subpath \"/tmp\"))\n";
-  p += "(allow file* (subpath \"/private/var/folders\"))\n";
-  p += "(allow file* (subpath \"/var/folders\"))\n";
-  if (const char *tmpdir = getenv("TMPDIR"))
-    p += std::format("(allow file* (subpath \"{}\"))\n", sbpl_escape(tmpdir));
-  p += "\n";
+  // Private temp directory.  jaim creates a fresh directory per
+  // invocation (see Config::exec) and points TMPDIR at it, so the
+  // sandboxed process has writable scratch space without handing it
+  // the shared system /tmp, /private/tmp, or /var/folders tree.
+  // Those system-wide locations stay denied by the default-deny rule
+  // at the top of this profile, which blocks leaks between concurrent
+  // sandboxes and exposure of files dropped by unsandboxed processes.
+  if (private_tmp_.empty())
+    err<std::logic_error>("generate_sandbox_profile: private_tmp_ unset");
+  p += std::format("(allow file* (subpath \"{}\"))\n\n",
+                   sbpl_escape(private_tmp_.string()));
 
   // Mode-specific home directory access
   if (mode_ == kCasual || mode_ == kBare) {
@@ -480,8 +486,13 @@ Config::make_script()
   if (script_inputs_.empty())
     return {};
 
-  // Create script in a temp directory
-  path tmpdir = std::filesystem::temp_directory_path();
+  // The script lives in the per-invocation private temp dir so the
+  // sandboxed child can unlink it after sourcing (see the rm trailer
+  // written below).  The old location — the real TMPDIR inherited
+  // from the parent — is no longer reachable from inside the sandbox.
+  if (private_tmp_.empty())
+    err<std::logic_error>("make_script: private_tmp_ unset");
+  path tmpdir = private_tmp_;
 
   // Generate random filename
   std::array<unsigned char, 10> rndbuf;
@@ -591,6 +602,30 @@ propagate_termination_status(int status, AtExit &&atexit = +[] {})
 void
 Config::exec(char **argv)
 {
+  // Per-invocation private temp directory.  Created first because
+  // make_script() drops the JAIM_SCRIPT file here, generate_sandbox_profile()
+  // embeds the resolved path in its allow rule, and make_env() in the
+  // child points TMPDIR at it.  canonical() is needed because the
+  // kernel enforces the sandbox against resolved paths — a profile
+  // that allowed /tmp/jaim.XYZ but not /private/tmp/jaim.XYZ would
+  // deny every access on macOS, where /tmp is a symlink.
+  {
+    path base = std::filesystem::temp_directory_path();
+    std::string templ = (base / "jaim.XXXXXXXX").string();
+    std::vector<char> buf(templ.begin(), templ.end());
+    buf.push_back('\0');
+    if (!mkdtemp(buf.data()))
+      syserr("mkdtemp({})", templ);
+    private_tmp_ = canonical(path(buf.data()));
+  }
+  // Force TMPDIR in the sandboxed env to the private dir.  Using
+  // insert_or_assign (rather than try_emplace) deliberately overrides
+  // any TMPDIR the user exported or set with --setenv: the sandbox
+  // denies writes everywhere else, so honoring a user-supplied TMPDIR
+  // would just break every program that uses $TMPDIR.
+  setenv_.insert_or_assign(
+      "TMPDIR", std::format("TMPDIR={}", private_tmp_.string()));
+
   auto script_path = make_script();
 
   // Generate the sandbox profile
@@ -645,14 +680,17 @@ Config::exec(char **argv)
     }
   }
 
-  // Parent process: wait for child, propagate termination status
-  std::function<void()> atexit_fn = +[] {};
-  if (!script_path.empty())
-    atexit_fn = [&script_path] {
-      struct stat sb;
-      if (!stat(script_path.c_str(), &sb))
-        unlink(script_path.c_str());
-    };
+  // Parent process: wait for child, propagate termination status.
+  // atexit_fn removes the private temp directory (which includes the
+  // generated script, if any).  Best-effort: a signal interrupting
+  // the parent can still leak the directory, so don't treat errors
+  // as fatal — jaim -u (planned, ja-8bh) will sweep up stragglers.
+  std::function<void()> atexit_fn = [this] {
+    if (!private_tmp_.empty()) {
+      std::error_code ec;
+      std::filesystem::remove_all(private_tmp_, ec);
+    }
+  };
 
   for (;;) {
     int status;

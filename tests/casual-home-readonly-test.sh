@@ -7,10 +7,10 @@
 # directory (minus masked subtrees).
 #
 # Fix: casual mode now grants `file-read*` on the home directory,
-# matching bare mode and the README.  CWD and /tmp remain writable
-# so normal work (editing files, compilation, etc.) still functions;
-# users who need writable state outside CWD should grant it with
-# --dir.
+# matching bare mode and the README.  CWD and the private $TMPDIR
+# remain writable so normal work (editing files, compilation, etc.)
+# still functions; users who need writable state outside CWD should
+# grant it with --dir.
 #
 # This test verifies:
 #   1. Creating a file under $HOME via jaim fails with EPERM.
@@ -19,7 +19,8 @@
 #   4. Reads of existing unmasked $HOME files still succeed (regression
 #      check — we want read-only, not no-access).
 #   5. CWD remains writable (regression check).
-#   6. /tmp remains writable (regression check).
+#   6. The shared system /tmp is denied (ja-4fk) but the sandbox's
+#      private $TMPDIR is writable.
 #
 # Run manually from the jaim source root:
 #
@@ -184,13 +185,23 @@ else
   pass=$((pass + 1))
 fi
 
-echo "==> Regression: /tmp remains writable:"
+echo "==> ja-4fk: shared /tmp is denied, private \$TMPDIR is writable:"
 
-# 6. /tmp is writable regardless of mode — jaim grants `file*` on
-#    /tmp and /private/tmp via the system-temp allow block.
+# 6a. /tmp and /private/tmp are the shared system temp directories.
+#     ja-4fk replaced the blanket allow on them with an allow on a
+#     per-invocation private directory, so writes to /tmp must fail
+#     and writes to $TMPDIR must succeed.
 TMPNAME="jaim-casual-readonly-tmp-$$"
-expect_ok "write /tmp" \
-  /bin/sh -c 'printf tmp-write > "/tmp/'"$TMPNAME"'" && /bin/cat "/tmp/'"$TMPNAME"'" && /bin/rm -f "/tmp/'"$TMPNAME"'"'
+expect_denied_eperm "write /tmp denied" \
+  /bin/sh -c 'printf tmp-write > "/tmp/'"$TMPNAME"'"'
+expect_denied_eperm "write /private/tmp denied" \
+  /bin/sh -c 'printf tmp-write > "/private/tmp/'"$TMPNAME"'"'
+
+# 6b. Private $TMPDIR (set by jaim to the per-invocation dir under
+#     the real TMPDIR) must be writable — otherwise programs that
+#     rely on $TMPDIR for scratch space break inside the sandbox.
+expect_ok "write \$TMPDIR" \
+  /bin/sh -c 'printf tmp-write > "$TMPDIR/'"$TMPNAME"'" && /bin/cat "$TMPDIR/'"$TMPNAME"'"'
 
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: casual-home-readonly-test.sh ($fail failures, $pass passed)"

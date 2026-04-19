@@ -20,6 +20,8 @@
  * Modified 2026 by Joseph Presley: port from Linux to macOS arm64.
  * Modified 2026 by Joseph Presley: add --file directive and claude.conf
  *   preset for coding-agent support (ja-ofy).
+ * Modified 2026 by Joseph Presley: add private_tmp_ for per-invocation
+ *   sandbox-private temp directory (ja-4fk).
  */
 
 #pragma once
@@ -112,6 +114,12 @@ struct Config {
   Credentials user_cred_;
   path shell_;
   mode_t old_umask_ = 0755;
+
+  // Per-invocation private temp directory.  Created by exec() with
+  // mkdtemp, allow-listed in the sandbox profile, and exported to the
+  // sandboxed process as TMPDIR.  Empty until exec() runs.  Removed
+  // when the sandboxed process exits.
+  path private_tmp_;
 
   Fd home_fd_;
   Fd home_jaim_fd_;
