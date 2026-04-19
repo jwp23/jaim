@@ -29,6 +29,13 @@
  * Modified 2026 by Joseph Presley: scrub inherited file descriptors
  *   above stderr in the child before execve so callers cannot leak
  *   sandbox-bypassing FDs into the sandboxed program (ja-oa7).
+ * Modified 2026 by Joseph Presley: replace blanket (allow mach*)
+ *   with an explicit mach-bootstrap/mach-register/mach-task-name
+ *   allow and a mach-lookup allow-list scoped to Apple's standard
+ *   system services (cfprefsd, opendirectoryd, trustd, logd,
+ *   SecurityServer, etc.) plus the generic XPC service prefix, so
+ *   privileged Mach operations (priv-host-port, priv-task-port,
+ *   host-special-port, kernel-endpoint) stay denied (ja-rf9).
  */
 
 #include "jaim.h"
@@ -283,8 +290,63 @@ Config::generate_sandbox_profile()
   p += "(allow signal)\n";
   p += "(allow sysctl-read)\n\n";
 
-  // Mach and IPC (needed for basic macOS functionality)
-  p += "(allow mach*)\n";
+  // Mach IPC.  The blanket (allow mach*) from the original port
+  // granted every Mach operation — including privileged host/task
+  // ports and arbitrary mach_register/mach_lookup — which defeats
+  // much of the point of sandboxing on macOS: launchd services and
+  // XPC endpoints are the usual lateral-movement vectors on this
+  // platform, not raw syscalls.  The list below restricts the
+  // profile to the operations a typical command-line tool actually
+  // needs (bootstrap for service discovery, register so the process
+  // can publish its own ephemeral ports for libnotify/libdispatch,
+  // and lookup scoped to a specific allow-list of system daemons).
+  //
+  // The allow-list mirrors Apple's own system.sb (in
+  // /System/Library/Sandbox/Profiles/) plus a handful of services
+  // that the tooling this sandbox is aimed at — shells, git,
+  // python, node, Claude Code — reaches for in practice:
+  // cfprefsd for user defaults, opendirectoryd for passwd/group
+  // lookups, trustd and SecurityServer for TLS/keychain, logd and
+  // notification_center for logging/notifications.  The
+  // (xpc-service-name-prefix "") rule keeps per-app XPC helpers
+  // reachable, matching Apple's backward-compat rule in system.sb.
+  // Privileged Mach operations (mach-priv-host-port, mach-priv-
+  // task-port, mach-host-special-port, mach-kernel-endpoint) are
+  // intentionally left under the default-deny rule at the top of
+  // the profile.
+  p += "(allow mach-bootstrap)\n";
+  p += "(allow mach-register (local-name-prefix \"\"))\n";
+  p += "(allow mach-task-name (target self))\n";
+  p += "(allow mach-lookup (xpc-service-name-prefix \"\"))\n";
+  p += "(allow mach-lookup\n";
+  p += "  (global-name \"com.apple.analyticsd\")\n";
+  p += "  (global-name \"com.apple.analyticsd.messagetracer\")\n";
+  p += "  (global-name \"com.apple.appsleep\")\n";
+  p += "  (global-name \"com.apple.bsd.dirhelper\")\n";
+  p += "  (global-name \"com.apple.cfprefsd.agent\")\n";
+  p += "  (global-name \"com.apple.cfprefsd.daemon\")\n";
+  p += "  (global-name \"com.apple.coreservices.launchservicesd\")\n";
+  p += "  (global-name \"com.apple.diagnosticd\")\n";
+  p += "  (global-name \"com.apple.distributed_notifications@1v3\")\n";
+  p += "  (global-name \"com.apple.distributed_notifications@Uv3\")\n";
+  p += "  (global-name \"com.apple.logd\")\n";
+  p += "  (global-name \"com.apple.logd.events\")\n";
+  p += "  (global-name \"com.apple.ocspd\")\n";
+  p += "  (global-name \"com.apple.runningboard\")\n";
+  p += "  (global-name \"com.apple.secinitd\")\n";
+  p += "  (global-name \"com.apple.SecurityServer\")\n";
+  p += "  (global-name \"com.apple.system.DirectoryService.libinfo_v1\")\n";
+  p += "  (global-name \"com.apple.system.logger\")\n";
+  p += "  (global-name \"com.apple.system.notification_center\")\n";
+  p += "  (global-name \"com.apple.system.opendirectoryd.api\")\n";
+  p += "  (global-name \"com.apple.system.opendirectoryd.libinfo\")\n";
+  p += "  (global-name \"com.apple.system.opendirectoryd.membership\")\n";
+  p += "  (global-name \"com.apple.trustd\")\n";
+  p += "  (global-name \"com.apple.trustd.agent\")\n";
+  p += "  (global-name \"com.apple.xpc.activity.unmanaged\"))\n\n";
+
+  // IPC and IOKit — still open, restricted in separate work items
+  // (see ja-tnn for ipc-posix-shm).
   p += "(allow ipc-posix*)\n";
   p += "(allow iokit*)\n\n";
 
