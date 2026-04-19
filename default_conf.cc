@@ -19,6 +19,9 @@
  * Modified 2026 by Joseph Presley: port from Linux to macOS arm64.
  * Modified 2026 by Joseph Presley: add default_claude_conf for the
  *   shipped Claude Code preset (ja-ofy).
+ * Modified 2026 by Joseph Presley: rewrite casual/bare/mask comments
+ *   so bare mode is documented as an empty private home rather than
+ *   a casual alias (ja-7qe).
  */
 
 #include "jaim.h"
@@ -49,12 +52,16 @@ const std::string jaim_defaults =
 # The default mode is strict.  A strict sandbox denies all access to
 # your home directory except the current working directory and any
 # explicitly granted directories.  A casual sandbox allows read-only
-# access to your home directory with sensitive files masked.  Bare
-# mode is equivalent to casual on jaim (macOS has no overlay file
-# system to distinguish them the way jai does on Linux).  Writes to
-# the home directory should be granted explicitly with --dir.
-# Uncomment any of the following to set the mode, or override it in
-# individual .jail files:
+# access to your real home directory, with sensitive files masked.
+# A bare sandbox does not see your real home at all: jaim creates an
+# empty $JAIM_CONFIG_DIR/<jail>.home/ and rewrites $HOME to point at
+# it, so the sandboxed process starts with no ambient dotfiles, shell
+# history, or config — a clean slate per jail.  The private home is
+# writable and persists across invocations (so tool state like shell
+# history or session caches is retained), and is removed when the
+# jail is torn down with jaim -u.  Writes to the real home should be
+# granted explicitly with --dir.  Uncomment any of the following to
+# set the mode, or override it in individual .jail files:
 
 # mode casual
 # mode bare
@@ -81,12 +88,15 @@ const std::string jaim_defaults =
 script? .jaimrc
 command source "${JAIM_SCRIPT:-/dev/null}"; "$0" "$@"
 
-# Masked files are denied access by the sandbox profile.  In casual
-# and bare modes, these files within your home directory will be
-# inaccessible to sandboxed commands.  If you want to avoid masking
-# any of these files in one particular configuration, you can use a
-# directive such as `unmask .aws` to undo the effects from a
-# previously included default file.
+# Masked files are denied access by the sandbox profile.  Masks only
+# matter in casual mode, which grants read-only access to your real
+# home; listed paths are carved back out of that grant so credential
+# files and browser data stay inaccessible.  Bare and strict modes
+# never grant access to your real home, so masks are redundant there
+# and have no effect.  If you want to avoid masking any of these
+# files in one particular configuration, you can use a directive
+# such as `unmask .aws` to undo the effects from a previously
+# included default file.
 
 mask .jaim
 # The entire ~/.ssh directory is denied by default so that private

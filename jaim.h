@@ -22,6 +22,8 @@
  *   preset for coding-agent support (ja-ofy).
  * Modified 2026 by Joseph Presley: add private_tmp_ for per-invocation
  *   sandbox-private temp directory (ja-4fk).
+ * Modified 2026 by Joseph Presley: add private_home_ for bare mode's
+ *   per-jail empty private home directory (ja-7qe).
  */
 
 #pragma once
@@ -120,6 +122,15 @@ struct Config {
   // sandboxed process as TMPDIR.  Empty until exec() runs.  Removed
   // when the sandboxed process exits.
   path private_tmp_;
+
+  // Per-jail private home directory for bare mode.  Lives at
+  // $JAIM_CONFIG_DIR/<jail>.home/ so it persists across invocations
+  // (state like shell history or tool caches survives between runs)
+  // and can be swept by jaim -u (ja-8bh).  Empty unless mode_==kBare;
+  // exec() creates the directory, generate_sandbox_profile() emits the
+  // allow rule, and make_env() rewrites HOME to this path so the real
+  // home stays denied by the default-deny rule.
+  path private_home_;
 
   Fd home_fd_;
   Fd home_jaim_fd_;

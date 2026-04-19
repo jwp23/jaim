@@ -22,6 +22,10 @@
  * Modified 2026 by Joseph Presley: private per-invocation temp dir
  *   replaces blanket /tmp and /private/tmp allow rules; TMPDIR is
  *   rewritten in the sandboxed env (ja-4fk).
+ * Modified 2026 by Joseph Presley: bare mode now gives the sandbox
+ *   its own empty $HOME under $JAIM_CONFIG_DIR/<jail>.home/ and
+ *   leaves the real home denied by default; casual mode keeps the
+ *   read-only real-home behavior (ja-7qe).
  */
 
 #include "jaim.h"
@@ -323,8 +327,8 @@ Config::generate_sandbox_profile()
                    sbpl_escape(private_tmp_.string()));
 
   // Mode-specific home directory access
-  if (mode_ == kCasual || mode_ == kBare) {
-    // Casual and Bare: read-only access to home directory, excluding
+  if (mode_ == kCasual) {
+    // Casual: read-only access to the real home directory, excluding
     // masked paths.  Writes go through the CWD allow rule below (which
     // grants file*), or through explicit --dir / --rdir grants.  jaim
     // has no overlay filesystem, so granting file* on $HOME would
@@ -388,6 +392,26 @@ Config::generate_sandbox_profile()
                        pub_regex_quoted);
       p += "\n";
     }
+  }
+  else if (mode_ == kBare) {
+    // Bare: the sandbox sees an empty $HOME that is disjoint from the
+    // real one.  exec() creates $JAIM_CONFIG_DIR/<jail>.home/ and
+    // rewrites the HOME env var to that path before handing control
+    // to the sandboxed process, so $HOME inside the sandbox resolves
+    // to this private directory rather than to the real home.  The
+    // real home stays denied by the (deny default) rule at the top
+    // of the profile — no allow rule covers it — which gives bare
+    // mode meaningfully stronger isolation than casual (no ambient
+    // dotfiles, no shell history, no config bleed-through).  Masks
+    // are irrelevant here: there is nothing under the sandbox-visible
+    // $HOME to mask, and the real home is already inaccessible.  The
+    // private home lives under homejaimpath_ (itself under the real
+    // home), so without this explicit allow the default-deny would
+    // swallow it too.
+    if (private_home_.empty())
+      err<std::logic_error>("generate_sandbox_profile: private_home_ unset");
+    p += std::format("(allow file* (subpath \"{}\"))\n\n",
+                     sbpl_escape(private_home_.string()));
   }
   // Strict mode: no home directory access by default (deny default handles it)
 
@@ -626,6 +650,27 @@ Config::exec(char **argv)
   setenv_.insert_or_assign(
       "TMPDIR", std::format("TMPDIR={}", private_tmp_.string()));
 
+  // Bare mode: materialize an empty per-jail home under the config
+  // directory and rewrite HOME to point at it.  Kept persistent across
+  // invocations (rather than created fresh in a mkdtemp dir like
+  // private_tmp_) so that tools the user expects to remember state —
+  // shell history, package caches, tool sessions — survive between
+  // runs.  jaim -u (ja-8bh) sweeps these dirs.  Must run before
+  // generate_sandbox_profile(), which reads private_home_ into its
+  // allow rule, and before make_env(), which would otherwise inherit
+  // the real HOME from the parent environment via try_emplace.
+  if (mode_ == kBare) {
+    path home_name = cat(sandbox_name_, ".home");
+    Fd phome = ensure_udir(home_jaim(true), home_name);
+    private_home_ = canonical(path(fdpath(*phome)));
+    // insert_or_assign, not try_emplace: a user-set HOME (from the
+    // inherited environment or --setenv) would point the sandboxed
+    // process at the real home, which is denied by the profile and
+    // would break every program that resolves ~ or reads $HOME.
+    setenv_.insert_or_assign(
+        "HOME", std::format("HOME={}", private_home_.string()));
+  }
+
   auto script_path = make_script();
 
   // Generate the sandbox profile
@@ -723,8 +768,8 @@ Config::opt_parser(bool dotjail)
           err<Options::Error>(R"(invalid mode {})", m);
       },
       R"(Set execution mode to one of the following:
-    casual - sandbox with read access to home directory
-    bare - sandbox with read access to home directory
+    casual - sandbox with read-only access to real home directory
+    bare - sandbox with empty private home; real home denied
     strict - sandbox with no home directory access)",
       "casual|bare|strict");
   opts(
