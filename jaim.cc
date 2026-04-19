@@ -26,6 +26,9 @@
  *   its own empty $HOME under $JAIM_CONFIG_DIR/<jail>.home/ and
  *   leaves the real home denied by default; casual mode keeps the
  *   read-only real-home behavior (ja-7qe).
+ * Modified 2026 by Joseph Presley: scrub inherited file descriptors
+ *   above stderr in the child before execve so callers cannot leak
+ *   sandbox-bypassing FDs into the sandboxed program (ja-oa7).
  */
 
 #include "jaim.h"
@@ -39,8 +42,10 @@
 #include <filesystem>
 #include <print>
 
+#include <libproc.h>
 #include <pwd.h>
 #include <ranges>
+#include <sys/proc_info.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -691,6 +696,33 @@ Config::exec(char **argv)
         err("sandbox_init: {}", errmsg);
       }
 #pragma clang diagnostic pop
+
+      // Scrub inherited file descriptors above stderr before exec.  The
+      // macOS sandbox enforces access control on path-based syscalls
+      // (open, stat, etc.); an FD the parent already has open bypasses
+      // those checks entirely, so a caller could smuggle a descriptor
+      // pointing anywhere on the filesystem into the sandboxed program.
+      // Enumerate this process's open descriptors via proc_pidinfo and
+      // close every one above stderr.  We cannot naively iterate
+      // 3..sysconf(_SC_OPEN_MAX): on macOS the per-process NOFILE rlimit
+      // can be RLIM_INFINITY, which makes sysconf return LONG_MAX and
+      // turns the loop into a near-infinite close() spin.  stdin,
+      // stdout, and stderr stay open so the child can still speak to
+      // the surrounding tty.
+      {
+        int need = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, nullptr, 0);
+        if (need > 0) {
+          std::vector<proc_fdinfo> fdinfos(need / sizeof(proc_fdinfo));
+          int got = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0,
+                                 fdinfos.data(), need);
+          int n = got > 0 ? got / int(sizeof(proc_fdinfo)) : 0;
+          for (int i = 0; i < n; ++i) {
+            int fd = fdinfos[i].proc_fd;
+            if (fd >= 3)
+              close(fd);
+          }
+        }
+      }
 
       if (!script_path.empty())
         setenv("JAIM_SCRIPT", script_path.c_str(), 1);
