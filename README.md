@@ -185,6 +185,7 @@ jaim
 -j, --jail NAME                 Use a named sandbox
 -D, --nocwd                     Don't grant access to the current directory
 -C, --conf FILE                 Use a specific configuration file
+-u                              Tear down sandbox state (see below) and exit
     --mask FILE                 Deny access to $HOME/FILE
     --unmask FILE               Undo a previous --mask
     --setenv VAR[=VALUE]        Set an environment variable
@@ -233,6 +234,16 @@ Use a named sandbox to keep state separate:
 jaim -j project-a claude
 jaim -j project-b claude
 ```
+
+Reset a sandbox's private home (wipes `~/.jaim/project-a.home/` and
+any stray `jaim.*` scratch dirs in `$TMPDIR`; leaves your `.conf` /
+`.jail` config files alone):
+
+```sh
+jaim -u -j project-a
+```
+
+Without `-j`, `jaim -u` sweeps every `*.home/` under `~/.jaim/`.
 
 ### Using jaim with coding agents
 

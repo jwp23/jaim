@@ -41,6 +41,11 @@
  *   SecurityServer, etc.) plus the generic XPC service prefix, so
  *   privileged Mach operations (priv-host-port, priv-task-port,
  *   host-special-port, kernel-endpoint) stay denied (ja-rf9).
+ * Modified 2026 by Joseph Presley: add -u cleanup flag and
+ *   Config::teardown() that removes per-jail private home
+ *   directories (all, or just the one selected by -j) and any
+ *   stray per-invocation private tmp directories a prior
+ *   signal-killed jaim left in the system TMPDIR (ja-8bh).
  */
 
 #include "jaim.h"
@@ -866,6 +871,115 @@ Config::exec(char **argv)
   }
 }
 
+void
+Config::teardown()
+{
+  // Runs for `jaim -u`.  Upstream jai also unmounts overlayfs mounts
+  // here; jaim's macOS port has no overlay filesystem (seatbelt
+  // enforces isolation in-kernel without any user-visible mount), so
+  // the only host-visible state a finished sandbox can leave behind
+  // is the per-jail private home (bare mode, persistent across runs
+  // by design) and the per-invocation private tmp dir (normally
+  // swept by exec()'s atexit_fn, but a signal-killed parent can leak
+  // one).  Everything we touch sits under paths the user owns, so
+  // teardown never needs elevated privileges.
+
+  // Per-jail private homes: <name>.home/ under homejaimpath_.  Skip
+  // silently if homejaimpath_ itself does not exist yet — `jaim -u`
+  // before `jaim --init` has nothing to clean.
+  Fd hj;
+  if (int fd = openat(home(), homejaimpath_.c_str(),
+                      O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      fd >= 0) {
+    hj = Fd(fd);
+    check_user(*hj);
+  }
+  else if (errno != ENOENT)
+    syserr("{}", fdpath(home(), homejaimpath_));
+
+  auto remove_home_dir = [this](const path &name) {
+    path full = homejaimpath_ / cat(name, ".home");
+    std::error_code ec;
+    auto n = std::filesystem::remove_all(full, ec);
+    if (ec)
+      warn("{}: {}", full.string(), ec.message());
+    else if (n > 0)
+      std::println("removed {}", full.string());
+  };
+
+  if (hj) {
+    if (!sandbox_name_.empty())
+      remove_home_dir(sandbox_name_);
+    else {
+      // Buffer the names first:  remove_all mutates the directory
+      // under the same fd readdir is iterating, and the results are
+      // implementation-defined.
+      std::vector<path> names;
+      if (auto d = try_opendir(*hj)) {
+        while (auto de = readdir(*d)) {
+          std::string_view nm = d_name(de);
+          if (nm == "." || nm == "..")
+            continue;
+          constexpr std::string_view suffix = ".home";
+          if (!nm.ends_with(suffix))
+            continue;
+          if (de->d_type != DT_DIR && de->d_type != DT_UNKNOWN)
+            continue;
+          names.emplace_back(nm.substr(0, nm.size() - suffix.size()));
+        }
+      }
+      for (const auto &n : names)
+        remove_home_dir(n);
+    }
+  }
+
+  // Stray per-invocation private tmp dirs (jaim.XXXXXXXX under the
+  // system TMPDIR).  exec()'s atexit_fn removes these on a normal
+  // parent exit; a signal before atexit leaks one.  Filter by user
+  // ownership so a different user's mkdtemp result is never touched
+  // (macOS's per-user TMPDIR already enforces this at the dir level,
+  // but the stat is cheap and keeps the sweep honest).  We do not
+  // try to distinguish leaked-vs-still-active dirs from a concurrent
+  // jaim — a user running `jaim -u` while another jaim is mid-run is
+  // explicitly asking for cleanup, and the sandboxed process losing
+  // its scratch space mid-flight is a UX problem, not a correctness
+  // one.
+  path tmp_base;
+  try {
+    tmp_base = std::filesystem::temp_directory_path();
+  } catch (const std::exception &) {
+    return;
+  }
+  auto td = try_opendir(AT_FDCWD, tmp_base, kFollow);
+  if (!td)
+    return;
+  std::vector<path> tmp_victims;
+  while (auto de = readdir(*td)) {
+    std::string_view nm = d_name(de);
+    if (!nm.starts_with("jaim."))
+      continue;
+    if (de->d_type != DT_DIR && de->d_type != DT_UNKNOWN)
+      continue;
+    path full = tmp_base / nm;
+    struct stat sb;
+    if (lstat(full.c_str(), &sb) != 0)
+      continue;
+    if (!S_ISDIR(sb.st_mode))
+      continue;
+    if (sb.st_uid != user_cred_.uid_)
+      continue;
+    tmp_victims.push_back(std::move(full));
+  }
+  for (const auto &full : tmp_victims) {
+    std::error_code ec;
+    auto n = std::filesystem::remove_all(full, ec);
+    if (ec)
+      warn("{}: {}", full.string(), ec.message());
+    else if (n > 0)
+      std::println("removed {}", full.string());
+  }
+}
+
 std::unique_ptr<Options>
 Config::opt_parser(bool dotjail)
 {
@@ -1143,11 +1257,18 @@ do_main(int argc, char **argv)
   path opt_C = "";
   bool opt_C_optional{};
   bool opt_init{};
+  bool opt_u{};
 
   auto opts = conf.opt_parser();
   (*opts)(
       "--init", [&] { opt_init = true; },
       "Create initial configuration files and exit");
+  (*opts)(
+      "-u", [&] { opt_u = true; },
+      R"(Clean up sandbox state and exit.  Removes per-jail private
+home directories ($JAIM_CONFIG_DIR/<jail>.home/) and any stray
+private tmp directories left behind by prior invocations.  With
+-j NAME, only that jail is cleaned.)");
   (*opts)(
       "-C", "--conf",
       [&](path p) {
@@ -1191,6 +1312,18 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   // Compute and cache pwd after early-exit options (--help, --version)
   // have been handled, since canonical() can fail under sandbox.
   setenv("PWD", conf.cwd().c_str(), 1);
+
+  // -u is an early-exit action:  do not run ensure_file (which would
+  // create config files the user is trying to clean around), do not
+  // parse configuration (no sandboxed command is going to run), and
+  // do not default sandbox_name_ to "default" — an empty name means
+  // "sweep every *.home", which is what the bare `-u` should do.  -j
+  // was already consumed by the parse_argv above and will have set
+  // sandbox_name_ if the user wants a single-jail scope.
+  if (opt_u) {
+    conf.teardown();
+    return 0;
+  }
 
   ensure_file(conf.home_jaim(true), ".defaults", jaim_defaults, 0600,
               create_warn);

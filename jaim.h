@@ -24,6 +24,9 @@
  *   sandbox-private temp directory (ja-4fk).
  * Modified 2026 by Joseph Presley: add private_home_ for bare mode's
  *   per-jail empty private home directory (ja-7qe).
+ * Modified 2026 by Joseph Presley: add teardown() for the -u cleanup
+ *   flag that sweeps per-jail private homes and stray private tmp
+ *   directories (ja-8bh).
  */
 
 #pragma once
@@ -142,6 +145,14 @@ struct Config {
   std::string generate_sandbox_profile();
   path make_script();
   void exec(char **argv);
+  // Cleanup for the -u flag:  removes per-jail private home
+  // directories under homejaimpath_ (scoped to sandbox_name_ if
+  // non-empty, otherwise every *.home/ the user owns there) and
+  // any stray per-invocation private tmp directories left in the
+  // system TMPDIR when a previous jaim was signal-killed before
+  // its atexit sweep.  Best-effort: warns on individual remove
+  // failures but does not abort.
+  void teardown();
   std::unique_ptr<Options> opt_parser(bool dotjail = false);
 
   int complete(Options::Completions c);

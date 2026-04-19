@@ -556,28 +556,24 @@ descriptors will be scrubbed by default in sandboxes.
   source all the scripts you have specified with `--script`.
 
 `-u`
-: Unmounts all overlay directories from `/run/jai` and cleans up
-  overlay-related files in `$HOME/.jai/*.work` that the user might not
-  be able to clean up without root.  This option also destroys the
-  private `/tmp` and `/var/tmp` directories (same directory at both
-  mount points), so make sure you don't need anything in there.
+: Tear down sandbox state and exit.  With no other options, removes
+  every `$JAIM_CONFIG_DIR/`*name*`.home/` directory the user owns
+  (bare-mode private homes — see `-m bare`), plus any stray
+  `jaim.XXXXXXXX/` scratch directories in the system `$TMPDIR` left
+  behind when a previous jaim invocation was signal-killed before its
+  exit-time sweep.  Configuration files (`.defaults`, `*.conf`,
+  `*.jail`, `.jaimrc`) are never touched.
 
-    Overlay mounts for casual jails are created under
-  `/run/jai/$USER/*.home` and left around between invocations of jai.
-  If you wish to change "upper" directories `$HOME/.jai/*.changes`,
-  the changes may not take effect until the file system is unmounted
-  and remounted.  For that reason, `--mask` options are only applied
-  when first creating the overlay mount.  Hence, you must run `jai -u`
-  before changing `--mask` options or directly editing the changes
-  directory.
+    If you specify `-j` *name* in addition to `-u`, only that jail's
+  private home directory (`$JAIM_CONFIG_DIR/`*name*`.home/`) is
+  removed.  The private `/tmp` sweep is unconditional either way —
+  those dirs have no per-jail identity.
 
-    If you specify `-j` *jail* in addition to `-u`, jai will clean up
-  only one specific jail.  For a casual jail, this means unmounting
-  the overlay mount and cleaning the work directory.  Strict jails all
-  share one copy of the password file (in which user `jai`'s home
-  directory has been changed to the invoking user's home directory).
-  `-u` will attempt to unmount and delete the password file, but may
-  not be able to if other strict jails are still in use.
+    `-u` never needs elevated privileges on macOS: unlike upstream
+  jai on Linux (which uses overlayfs and namespaces), the jaim port
+  relies entirely on in-kernel Seatbelt enforcement and leaves no
+  mounts, UID-mapped volumes, or root-owned files behind, so every
+  path `-u` touches already belongs to the invoking user.
 
 `--print-defaults`
 : Prints the default contents for `$HOME/.jai/.defaults`.
