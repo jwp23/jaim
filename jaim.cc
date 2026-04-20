@@ -57,9 +57,15 @@
  *   gated resources blocked at the TCC layer on top of the
  *   Seatbelt profile).  Strict mode now requires root (sudo) and
  *   the _jaim user to exist (ja-txx).
+ * Modified 2026 by Joseph Presley: strict mode now applies a per-
+ *   invocation extended-ACL entry (acl.h) granting the _jaim user
+ *   access to every --dir, --file, and CWD grant before fork; the
+ *   parent's atexit_fn strips those entries after the sandbox
+ *   exits so the grant does not outlive the run (ja-ekp).
  */
 
 #include "jaim.h"
+#include "acl.h"
 #include "fs.h"
 
 #include <cassert>
@@ -824,6 +830,44 @@ Config::exec(char **argv)
       syserr("chown({}, _jaim)", script_path.string());
   }
 
+  // Strict mode: extend granted paths with a per-invocation ACL that
+  // lets _jaim (the setuid target of the forked child) reach them.
+  // Seatbelt will admit _jaim because the profile names the paths,
+  // but POSIX still blocks the syscall unless _jaim has read/execute
+  // bits on every directory in the path and rwx as appropriate on
+  // the target.  Rather than chmodding user-owned paths world-
+  // accessible (permanent, leaks to every user) or running
+  // sandboxed tools under the invoking user's group membership
+  // (would require setup per path), we add an explicit allow ACL
+  // for _jaim that we strip in the parent's atexit_fn after the
+  // sandbox exits.  Directories are swept recursively so existing
+  // children (not just newly-created ones covered by the ACL's
+  // inherit flags) become reachable.  File grants do not need
+  // recursion.  The sweep is best-effort: a per-entry failure is
+  // warned but does not abort the launch — a partially-working
+  // sandbox beats no sandbox at all when the user has a thousand
+  // files under their cwd and one of them is owned by root.
+  if (mode_ == kStrict) {
+    for (const auto &[dir, flags] : grant_directories_) {
+      auto perms = (flags & kGrantRO) ? jaim_acl::kReadExec
+                                      : jaim_acl::kReadWriteExec;
+      jaim_acl::apply_recursive(dir, jaim_user_cred_.uid_, perms);
+    }
+    for (const auto &[f, flags] : grant_files_) {
+      auto perms = (flags & kGrantRO)
+                       ? jaim_acl::kRead
+                       : jaim_acl::PermMask(jaim_acl::kRead | jaim_acl::kWrite);
+      try {
+        jaim_acl::add_allow_user(f, jaim_user_cred_.uid_, perms);
+      } catch (const std::exception &e) {
+        warn("{}", e.what());
+      }
+    }
+    if (grant_cwd_)
+      jaim_acl::apply_recursive(cwd(), jaim_user_cred_.uid_,
+                                jaim_acl::kReadWriteExec);
+  }
+
   // Generate the sandbox profile
   auto profile = generate_sandbox_profile();
 
@@ -918,10 +962,37 @@ Config::exec(char **argv)
 
   // Parent process: wait for child, propagate termination status.
   // atexit_fn removes the private temp directory (which includes the
-  // generated script, if any).  Best-effort: a signal interrupting
-  // the parent can still leak the directory, so don't treat errors
-  // as fatal — jaim -u (planned, ja-8bh) will sweep up stragglers.
+  // generated script, if any) and, for strict mode, strips the per-
+  // invocation _jaim ACL entries from every granted path so the
+  // setuid-drop grant does not outlive the sandbox.  Best-effort: a
+  // signal interrupting the parent can still leak the directory or
+  // leave ACL entries behind, so don't treat errors as fatal — jaim
+  // -u (ja-8bh) will sweep up tmp stragglers, and stale _jaim ACL
+  // entries are harmless on their own (the grants only matter while
+  // a sandboxed child holds _jaim's uid, and the next jaim run will
+  // re-add or re-clear them as needed).
   std::function<void()> atexit_fn = [this] {
+    if (mode_ == kStrict && jaim_user_cred_) {
+      uid_t u = jaim_user_cred_.uid_;
+      for (const auto &[dir, _] : grant_directories_)
+        try {
+          jaim_acl::remove_recursive(dir, u);
+        } catch (const std::exception &e) {
+          warn("{}", e.what());
+        }
+      for (const auto &[f, _] : grant_files_)
+        try {
+          jaim_acl::remove_user_entries(f, u);
+        } catch (const std::exception &e) {
+          warn("{}", e.what());
+        }
+      if (grant_cwd_ && !cwd_.empty())
+        try {
+          jaim_acl::remove_recursive(cwd_, u);
+        } catch (const std::exception &e) {
+          warn("{}", e.what());
+        }
+    }
     if (!private_tmp_.empty()) {
       std::error_code ec;
       std::filesystem::remove_all(private_tmp_, ec);

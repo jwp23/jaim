@@ -5,7 +5,7 @@ CXXFLAGS ?= -O2
 CXXFLAGS += -std=gnu++23 -Wall -Wextra
 PREFIX ?= $(HOME)/.local
 
-SRCS = complete.cc cred.cc default_conf.cc fs.cc jaim.cc options.cc setup_user.cc
+SRCS = acl.cc complete.cc cred.cc default_conf.cc fs.cc jaim.cc options.cc setup_user.cc
 OBJS = $(SRCS:.cc=.o)
 TARGET = jaim
 
@@ -18,11 +18,12 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 # Header dependencies
+acl.o: acl.h defer.h err.h argtype.h move_only_function.h
 complete.o: jaim.h fs.h err.h defer.h options.h cred.h config.h argtype.h move_only_function.h
 cred.o: cred.h err.h config.h
 default_conf.o: jaim.h fs.h err.h defer.h options.h cred.h config.h argtype.h move_only_function.h
 fs.o: fs.h defer.h err.h config.h argtype.h move_only_function.h
-jaim.o: jaim.h fs.h err.h defer.h options.h cred.h config.h argtype.h move_only_function.h
+jaim.o: jaim.h fs.h err.h defer.h options.h cred.h config.h argtype.h move_only_function.h acl.h
 options.o: options.h err.h config.h
 setup_user.o: cred.h err.h config.h
 
