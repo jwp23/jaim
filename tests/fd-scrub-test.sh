@@ -12,14 +12,23 @@
 #
 # This test verifies:
 #   1. A descriptor left open on fd 3 in the caller is closed inside
-#      the sandbox (strict mode, where the target path itself is
-#      denied — so both the path and the FD must be blocked).
+#      the sandbox (strongest path-denying mode, where the target
+#      path itself is denied — so both the path and the FD must be
+#      blocked).
 #   2. Higher-numbered descriptors (fd 7 here) are also closed — the
 #      scrub must cover the range, not just fd 3.
 #   3. The scrub applies in every mode (casual and bare, not just
-#      strict) — the leak is a sandbox bypass regardless of mode.
+#      the path-denying mode) — the leak is a sandbox bypass
+#      regardless of mode.
 #   4. stdin, stdout, and stderr stay open — the sandboxed program
 #      can still speak to its controlling tty.
+#
+# Since ja-txx, strict mode requires root (sudo).  Bare mode denies
+# the real $HOME path identically (both rely on the default-deny
+# rule at the top of the Seatbelt profile), so non-root runs exercise
+# bare in place of strict — the FD-scrub invariant is mode-
+# independent.  Root runs still exercise strict, which is the
+# original intent.
 #
 # Run manually from the jaim source root:
 #
@@ -41,6 +50,18 @@ else
   JAIM="$PWD/jaim"
 fi
 [ -x "$JAIM" ] || { echo "SKIP: no jaim binary at $JAIM (run make first)"; exit 77; }
+
+# Strict mode requires root (ja-txx).  When non-root, fall back to
+# bare mode, which has the same $HOME path-denial semantics for the
+# purposes of this test — both modes leave the real home off the
+# sandbox's allow list, so opening SECRET by path fails either way,
+# and the FD-leak probe still proves scrubbing works.  When root,
+# test the original strict mode.
+if [ "$(id -u)" = 0 ]; then
+  DENY_MODE=strict
+else
+  DENY_MODE=bare
+fi
 
 # Regenerate .defaults so the test exercises the current binary.
 if [ -f "$HOME/.jaim/.defaults" ]; then
@@ -115,10 +136,10 @@ case $out in
 esac
 exec 3<&-
 
-echo "==> strict mode: fd 3 must be scrubbed before execve"
+echo "==> $DENY_MODE mode: fd 3 must be scrubbed before execve"
 exec 3< "$SECRET"
-expect_closed "strict fd 3" 3 \
-  "$JAIM" -m strict /usr/bin/perl -e "$(probe 3)"
+expect_closed "$DENY_MODE fd 3" 3 \
+  "$JAIM" -m "$DENY_MODE" /usr/bin/perl -e "$(probe 3)"
 exec 3<&-
 
 echo "==> casual mode: fd 3 must also be scrubbed (leak is mode-independent)"
@@ -135,15 +156,15 @@ exec 3<&-
 
 echo "==> higher-numbered fds are scrubbed (not just fd 3)"
 exec 7< "$SECRET"
-expect_closed "strict fd 7" 7 \
-  "$JAIM" -m strict /usr/bin/perl -e "$(probe 7)"
+expect_closed "$DENY_MODE fd 7" 7 \
+  "$JAIM" -m "$DENY_MODE" /usr/bin/perl -e "$(probe 7)"
 exec 7<&-
 
 echo "==> stdio (fds 0/1/2) stays open — regression check"
 # If the scrub is too aggressive and also closes stdio, /bin/echo
 # inside the sandbox would have nowhere to write and this would
 # either fail or produce no output.
-out=$("$JAIM" -m strict /bin/echo "stdio-alive-$$" </dev/null 2>&1) && rc=0 || rc=$?
+out=$("$JAIM" -m "$DENY_MODE" /bin/echo "stdio-alive-$$" </dev/null 2>&1) && rc=0 || rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "stdio-alive-$$" ]; then
   echo "  ok   [stdio alive]: echo over stdout works post-scrub"
   pass=$((pass + 1))

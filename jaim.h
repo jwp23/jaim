@@ -27,6 +27,10 @@
  * Modified 2026 by Joseph Presley: add teardown() for the -u cleanup
  *   flag that sweeps per-jail private homes and stray private tmp
  *   directories (ja-8bh).
+ * Modified 2026 by Joseph Presley: add jaim_user_cred_ for strict-mode
+ *   UID separation; exec() looks up _jaim once in the parent and the
+ *   forked child calls enter_permanently() on it before sandbox_init
+ *   (ja-txx).
  */
 
 #pragma once
@@ -134,6 +138,18 @@ struct Config {
   // allow rule, and make_env() rewrites HOME to this path so the real
   // home stays denied by the default-deny rule.
   path private_home_;
+
+  // Credentials for the _jaim system user.  Populated by exec() when
+  // mode_ == kStrict (after verifying euid == 0 and that the user
+  // exists); empty in casual and bare modes, which run with the
+  // invoking user's credentials and do not require root.  The forked
+  // child calls enter_permanently() on this *before* sandbox_init so
+  // the sandboxed process starts at an unprivileged UID with no TCC
+  // grants.  The lookup and prerequisite checks live in the parent
+  // so missing-root / missing-_jaim failures surface as a plain
+  // err() with a helpful pointer at `sudo ... --setup-user`, before
+  // any temp dirs or HOME rewrites have been set up.
+  Credentials jaim_user_cred_;
 
   Fd home_fd_;
   Fd home_jaim_fd_;

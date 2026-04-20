@@ -50,6 +50,13 @@
  *   --remove-user one-shot flags that create/remove the _jaim
  *   system account used by strict-mode UID separation; both
  *   require root (ja-du9).
+ * Modified 2026 by Joseph Presley: strict mode now forks and
+ *   setuids to the _jaim system user before sandbox_init so the
+ *   sandboxed child inherits an unprivileged UID with no TCC
+ *   grants (camera, mic, contacts, calendar, and other privacy-
+ *   gated resources blocked at the TCC layer on top of the
+ *   Seatbelt profile).  Strict mode now requires root (sudo) and
+ *   the _jaim user to exist (ja-txx).
  */
 
 #include "jaim.h"
@@ -722,6 +729,35 @@ propagate_termination_status(int status, AtExit &&atexit = +[] {})
 void
 Config::exec(char **argv)
 {
+  // Strict mode: fork + setuid to the _jaim system user before
+  // sandbox_init, so the sandboxed child inherits an unprivileged
+  // UID that macOS TCC has no grants for.  Seatbelt alone cannot
+  // block camera, mic, contacts, calendar, or the other privacy-
+  // gated resources — those are enforced by TCC at a layer above
+  // the sandbox, keyed on process identity rather than on the
+  // profile — so dropping to an account that has never been
+  // granted any TCC permission is what actually closes that gap.
+  // Two prerequisites must hold before we can drop:
+  //   1. jaim must be running as root (setgroups/setgid/setuid all
+  //      require it).  Users reach this via `sudo jaim`; a setuid-
+  //      root install is a planned follow-on (ja-fe2) but not yet
+  //      available.
+  //   2. The _jaim system user must exist, created once per host
+  //      with `sudo jaim --setup-user` (ja-du9).
+  // Both checks run up front, before any temp dir / HOME / profile
+  // state has been built, so a missing prerequisite exits cleanly
+  // via err() with a pointer at the fix and leaves nothing behind.
+  if (mode_ == kStrict) {
+    if (geteuid() != 0)
+      err("strict mode requires root (for setuid to _jaim); "
+          "rerun with sudo");
+    jaim_user_cred_ = Credentials::get_jaim_user();
+    if (!jaim_user_cred_)
+      err("strict mode requires the _jaim system user; "
+          "run `sudo {} --setup-user` once to create it",
+          prog.filename().string());
+  }
+
   // Per-invocation private temp directory.  Created first because
   // make_script() drops the JAIM_SCRIPT file here, generate_sandbox_profile()
   // embeds the resolved path in its allow rule, and make_env() in the
@@ -769,6 +805,25 @@ Config::exec(char **argv)
 
   auto script_path = make_script();
 
+  // Strict mode: the private temp dir (mkdtemp'd above) and any
+  // generated script file were created by the root parent and are
+  // root-owned.  The forked child runs as _jaim after the drop
+  // below, so it would be unable to write to its own $TMPDIR or
+  // read $JAIM_SCRIPT without an ownership change.  chown while
+  // we still have root in the parent; the sandbox profile
+  // already grants the paths, we just need POSIX permissions to
+  // line up.  Parent cleanup (atexit_fn → remove_all) still runs
+  // as root, so handing the dir off does not block teardown.
+  if (mode_ == kStrict) {
+    if (chown(private_tmp_.c_str(), jaim_user_cred_.uid_,
+              jaim_user_cred_.gid_))
+      syserr("chown({}, _jaim)", private_tmp_.string());
+    if (!script_path.empty() &&
+        chown(script_path.c_str(), jaim_user_cred_.uid_,
+              jaim_user_cred_.gid_))
+      syserr("chown({}, _jaim)", script_path.string());
+  }
+
   // Generate the sandbox profile
   auto profile = generate_sandbox_profile();
 
@@ -776,6 +831,19 @@ Config::exec(char **argv)
   if (!pid) {
     // Child process
     try {
+      // Strict mode: drop from root to _jaim *before* sandbox_init so
+      // the Seatbelt profile and every syscall afterward (including
+      // execve) run under an unprivileged UID that TCC has no grants
+      // for.  setuid() from root on macOS replaces real, effective,
+      // and saved uid — irreversible — so no code below this point
+      // can regain root, by design.  The parent already verified the
+      // prerequisites and populated jaim_user_cred_, so we only apply
+      // it here; enter_permanently() still re-checks euid == 0 as a
+      // backstop against a bug that would otherwise silently leave
+      // the sandboxed child running as root.
+      if (mode_ == kStrict)
+        jaim_user_cred_.enter_permanently();
+
       // Apply sandbox profile before exec
       char *errorbuf = nullptr;
 #pragma clang diagnostic push

@@ -21,6 +21,10 @@
  * Modified 2026 by Joseph Presley: add kJaimSystemUser, get_jaim_user()
  *   lookup, and setup_jaim_user/remove_jaim_user declarations backing
  *   --setup-user and --remove-user (ja-du9).
+ * Modified 2026 by Joseph Presley: add Credentials::enter_permanently
+ *   for strict-mode UID separation: drops root to this Credentials via
+ *   setgroups/setgid/setuid in the forked child before sandbox_init
+ *   (ja-txx).
  */
 
 #pragma once
@@ -105,6 +109,19 @@ struct Credentials {
 
   void make_effective() const;
   void make_real() const;
+  // Permanently drop from root to this Credentials' uid/gid/groups via
+  // setgroups, setgid, setuid (in that order).  Requires euid == 0 on
+  // entry and *this to be populated; throws via err() otherwise.  On
+  // macOS setuid() from root replaces real, effective, *and* saved
+  // uid, so this is a one-way door — no code after the call can
+  // regain root.  Used by Config::exec()'s child in strict mode,
+  // before sandbox_init, so the sandboxed process starts at an
+  // unprivileged UID that macOS TCC has no grants for (camera, mic,
+  // contacts, calendar, and the other privacy-gated resources are
+  // all blocked for _jaim regardless of what the Seatbelt profile
+  // allows, because TCC is keyed on the process identity rather
+  // than on the profile).
+  void enter_permanently() const;
   std::string show() const;
   explicit operator bool() const noexcept { return uid_ != -1; }
 

@@ -19,6 +19,8 @@
  * Modified 2026 by Joseph Presley: port from Linux to macOS arm64.
  * Modified 2026 by Joseph Presley: add get_jaim_user() lookup helper
  *   for the _jaim system user (ja-du9).
+ * Modified 2026 by Joseph Presley: add enter_permanently() for strict-
+ *   mode UID separation (ja-txx).
  */
 
 #include "cred.h"
@@ -48,6 +50,27 @@ Credentials::make_real() const
   if (groups_ != getgroups() && setgroups(groups_.size(), groups_.data()))
     syserr("setgroups");
   if (gid_ != getgid() && setgid(gid_))
+    syserr("setgid");
+  if (setuid(uid_))
+    syserr("setuid");
+}
+
+void
+Credentials::enter_permanently() const
+{
+  // Caller (Config::exec in strict mode) verifies both of these
+  // before reaching us; repeat the checks here because
+  // enter_permanently() is a permanent, irreversible operation and
+  // silently doing nothing (the way make_real() does when non-root)
+  // would leave the sandboxed child running as root — exactly the
+  // threat this function exists to close.
+  if (geteuid() != 0)
+    err("enter_permanently called with euid={} (not root)", geteuid());
+  if (!*this)
+    err("enter_permanently called on an unpopulated Credentials");
+  if (setgroups(groups_.size(), groups_.data()))
+    syserr("setgroups");
+  if (setgid(gid_))
     syserr("setgid");
   if (setuid(uid_))
     syserr("setuid");
