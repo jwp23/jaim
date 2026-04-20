@@ -43,6 +43,7 @@ compile_commands.json
 
 # jaim build artifacts
 /jaim
+/jaim-overlay
 /jaim-*.tar.gz
 /jaim.1
 /jaim.conf
