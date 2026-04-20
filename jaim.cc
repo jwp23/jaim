@@ -77,6 +77,11 @@
  *   exits.  The SBPL grants file* on the mount and keeps the real
  *   home denied.  teardown() sweeps stray <jail>.changes/ and
  *   <jail>.mount/ directories for -u cleanup (ja-ifo).
+ * Modified 2026 by Joseph Presley: replace blanket (allow ipc-posix*)
+ *   with selective ipc-posix-shm and ipc-posix-sem allows scoped to
+ *   the apple.shm. and com.apple. POSIX IPC name prefixes, so the
+ *   sandboxed process cannot open or attach to arbitrary cross-
+ *   process shared-memory segments or semaphores (ja-tnn).
  */
 
 #include "jaim.h"
@@ -470,9 +475,18 @@ Config::generate_sandbox_profile()
   p += "  (global-name \"com.apple.trustd.agent\")\n";
   p += "  (global-name \"com.apple.xpc.activity.unmanaged\"))\n\n";
 
-  // IPC and IOKit — still open, restricted in separate work items
-  // (see ja-tnn for ipc-posix-shm).
-  p += "(allow ipc-posix*)\n";
+  // POSIX IPC — restrict SHM/semaphore names to the Apple framework
+  // prefixes used by system services (notification_center, cfprefsd,
+  // ColorSync, etc.).  Blanket (allow ipc-posix*) would let the
+  // sandboxed process open or attach to any cross-process SHM segment
+  // or named semaphore, including ones an attacker-controlled peer
+  // could publish.  IOKit stays open for now.
+  p += "(allow ipc-posix-shm*\n";
+  p += "  (ipc-posix-name-prefix \"apple.shm.\")\n";
+  p += "  (ipc-posix-name-prefix \"com.apple.\"))\n";
+  p += "(allow ipc-posix-sem\n";
+  p += "  (ipc-posix-name-prefix \"apple.shm.\")\n";
+  p += "  (ipc-posix-name-prefix \"com.apple.\"))\n";
   p += "(allow iokit*)\n\n";
 
   // Network access (jaim doesn't restrict network, same as jai)
