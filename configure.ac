@@ -32,6 +32,6 @@ TEST_ABS_TOP_SRCDIR=`cd "$srcdir" && pwd -P`
 AC_SUBST([TEST_ABS_TOP_BUILDDIR])
 AC_SUBST([TEST_ABS_TOP_SRCDIR])
 
-AC_CONFIG_FILES([Makefile tests/Makefile tests/common.sh tests/setup-setuid.sh])
-AC_CONFIG_COMMANDS([test-scripts], [chmod +x tests/common.sh tests/setup-setuid.sh])
+AC_CONFIG_FILES([Makefile tests/Makefile tests/common.sh])
+AC_CONFIG_COMMANDS([test-scripts], [chmod +x tests/common.sh])
 AC_OUTPUT

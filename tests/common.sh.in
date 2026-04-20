@@ -106,7 +106,7 @@ configure_privilege_mode() {
         TEST_PRIVILEGE_MODE=setuid
         JAI_BIN=$setuid_jai
       else
-        skip "need a root shell or a current $JAI_SUID_BIN; run tests/setup-setuid.sh or relink jai.suid manually"
+        skip "need a root shell or a current $JAI_SUID_BIN; run \`sudo jaim --setup-setuid\` or relink jai.suid manually"
       fi
       ;;
     root)

@@ -25,6 +25,10 @@
  *   for strict-mode UID separation: drops root to this Credentials via
  *   setgroups/setgid/setuid in the forked child before sandbox_init
  *   (ja-txx).
+ * Modified 2026 by Joseph Presley: add setup_setuid() declaration
+ *   backing the --setup-setuid flag, which installs the running jaim
+ *   binary with mode 4555 so users can run `jaim -m strict` without
+ *   sudo (ja-fe2).
  */
 
 #pragma once
@@ -170,6 +174,19 @@ void setup_jaim_user();
 // only persistent state jaim's setup creates on the host, so this
 // is the full uninstall for that piece.
 void remove_jaim_user();
+
+// Install the running jaim binary as setuid root (chown root:wheel,
+// chmod 4555).  Requires euid == 0; throws otherwise.  After this
+// runs, any user can invoke `jaim -m strict` without sudo: the
+// kernel hands jaim euid 0 at exec, do_main() drops effective uid
+// back to the invoking user immediately, and Config::exec()
+// re-elevates only inside the strict-mode block.  Operates on the
+// resolved path of the currently-running executable (resolved via
+// _NSGetExecutablePath + realpath); installs in place rather than
+// copying to a fixed location so the install reflects whatever
+// build/install location the user has already chosen.  Idempotent
+// (running it twice is a no-op except for any output).
+void setup_setuid();
 
 template<>
 struct std::formatter<Credentials> : std::formatter<std::string_view> {

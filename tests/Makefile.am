@@ -31,7 +31,7 @@ jai_test_pty_driver_SOURCES = jai-test-pty-driver.cc
 fs_acl_test_SOURCES = fs_acl_test.cc ../fs.cc ../fs.h ../defer.h ../err.h
 options_test_SOURCES = options_test.cc ../options.cc ../options.h
 
-EXTRA_DIST = $(TESTS) common.sh.in setup-setuid.sh.in
+EXTRA_DIST = $(TESTS) common.sh.in
 
 CLEANFILES = *~
 
@@ -39,6 +39,3 @@ maintainer-clean-local:
 	rm -rf .cache .deps
 
 MAINTAINERCLEANFILES = $(srcdir)/Makefile.in
-
-all-local:
-	chmod +x $(builddir)/setup-setuid.sh

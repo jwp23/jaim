@@ -2,5 +2,4 @@
 /jai_test_probe
 /jai_test_pty_driver
 /options_test
-/setup-setuid.sh
 /fs_acl_test

@@ -62,6 +62,13 @@
  *   access to every --dir, --file, and CWD grant before fork; the
  *   parent's atexit_fn strips those entries after the sandbox
  *   exits so the grant does not outlive the run (ja-ekp).
+ * Modified 2026 by Joseph Presley: drop effective uid to the invoking
+ *   user at the very top of do_main() when jaim was exec'd through a
+ *   setuid-root install, then re-elevate inside Config::exec()'s
+ *   strict-mode block via seteuid(0) for the chown / setuid that
+ *   need root.  Add --setup-setuid one-shot flag that installs the
+ *   running binary mode 4555 so `jaim -m strict` works without sudo
+ *   (ja-fe2).
  */
 
 #include "jaim.h"
@@ -744,19 +751,20 @@ Config::exec(char **argv)
   // profile — so dropping to an account that has never been
   // granted any TCC permission is what actually closes that gap.
   // Two prerequisites must hold before we can drop:
-  //   1. jaim must be running as root (setgroups/setgid/setuid all
-  //      require it).  Users reach this via `sudo jaim`; a setuid-
-  //      root install is a planned follow-on (ja-fe2) but not yet
-  //      available.
+  //   1. jaim must be able to reach euid 0.  Two paths get there:
+  //      `sudo jaim` (real uid 0) or a setuid-root install run by
+  //      any user (do_main dropped euid back at startup but left
+  //      saved-set-user-id at 0, so seteuid(0) here re-elevates).
   //   2. The _jaim system user must exist, created once per host
   //      with `sudo jaim --setup-user` (ja-du9).
   // Both checks run up front, before any temp dir / HOME / profile
   // state has been built, so a missing prerequisite exits cleanly
   // via err() with a pointer at the fix and leaves nothing behind.
   if (mode_ == kStrict) {
-    if (geteuid() != 0)
-      err("strict mode requires root (for setuid to _jaim); "
-          "rerun with sudo");
+    if (seteuid(0) != 0)
+      err("strict mode requires root: rerun with sudo, or run "
+          "`sudo {} --setup-setuid` once to install jaim as setuid",
+          prog.filename().string());
     jaim_user_cred_ = Credentials::get_jaim_user();
     if (!jaim_user_cred_)
       err("strict mode requires the _jaim system user; "
@@ -1394,6 +1402,24 @@ version 3 or later; see the file named COPYING for details.)",
 int
 do_main(int argc, char **argv)
 {
+  // If we were exec'd through a setuid-root install of jaim (mode
+  // 4555, owner root), drop effective uid back to the invoking user
+  // immediately.  saved-set-user-id stays at 0 so Config::exec()'s
+  // strict-mode block can re-elevate via seteuid(0) for the chown
+  // and the child's setuid that actually need root.  Everything in
+  // between — option parsing, config loading, ensure_file, sandbox
+  // profile generation — runs unprivileged so a bug in those paths
+  // cannot escalate via the elevated euid.  When jaim is *not*
+  // setuid (geteuid == getuid), the condition is false and this is a
+  // no-op; when invoked via sudo (real uid == 0), getuid() == 0 and
+  // the seteuid call would also be a no-op so we skip it.  setegid
+  // is not touched because jaim ships mode 4555 (setuid only, not
+  // setgid), so egid already equals the invoking user's gid.
+  if (geteuid() == 0 && getuid() != 0) {
+    if (seteuid(getuid()) != 0)
+      syserr("seteuid({}): cannot drop effective uid", getuid());
+  }
+
   Config conf;
   conf.init_credentials();
 
@@ -1403,6 +1429,7 @@ do_main(int argc, char **argv)
   bool opt_u{};
   bool opt_setup_user{};
   bool opt_remove_user{};
+  bool opt_setup_setuid{};
 
   auto opts = conf.opt_parser();
   (*opts)(
@@ -1425,6 +1452,16 @@ Must be run as root (e.g. sudo jaim --setup-user).  Idempotent.)");
       R"(Remove the _jaim system user and its primary group via
 dscl, then exit.  Must be run as root.  Idempotent: succeeds
 whether the account is present or not.)");
+  (*opts)(
+      "--setup-setuid", [&] { opt_setup_setuid = true; },
+      R"(Install the running jaim binary as setuid root (chown
+root:wheel, chmod 4555), then exit.  After this runs, any user
+can run `jaim -m strict` without sudo: the kernel hands jaim
+euid 0 at exec, do_main() drops effective uid back to the
+invoking user immediately, and Config::exec() re-elevates only
+inside the strict-mode block.  Mode 4555 (no write bits) makes
+the binary tamper-resistant.  Must be run as root (e.g.
+sudo jaim --setup-setuid).  Idempotent.)");
   (*opts)(
       "-C", "--conf",
       [&](path p) {
@@ -1495,6 +1532,20 @@ The default is CMD.conf if it exists, otherwise default.conf)",
   }
   if (opt_remove_user) {
     remove_jaim_user();
+    return 0;
+  }
+
+  // --setup-setuid is also host-scoped and root-only.  It chmods the
+  // running binary in place rather than mutating system state via
+  // dscl, but the early-exit pattern is the same:  no ensure_file
+  // and no config parsing, since the user is configuring the jaim
+  // binary itself rather than running a sandboxed command.  Runs
+  // after the do_main drop, so geteuid() is non-zero unless the
+  // user invoked us via sudo — exactly the behavior we want, since
+  // installing a setuid binary should require an explicit sudo
+  // authentication and not just access to an already-setuid jaim.
+  if (opt_setup_setuid) {
+    setup_setuid();
     return 0;
   }
 

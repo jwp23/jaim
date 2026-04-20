@@ -15,24 +15,37 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
- * setup_user.cc — create and remove the _jaim system user via dscl.
- * Backs the --setup-user and --remove-user one-shot flags in jaim.cc.
- * The user is a Phase 2 prerequisite for strict-mode UID separation
+ * setup_user.cc — create and remove the _jaim system user via dscl,
+ * and install jaim itself as setuid root.  Backs the --setup-user,
+ * --remove-user, and --setup-setuid one-shot flags in jaim.cc.  The
+ * _jaim user is a prerequisite for strict-mode UID separation
  * (ja-txx):  dropping to an unprivileged account before sandbox_init
  * puts the sandboxed child under macOS TCC as a principal with no
  * granted permissions (no camera, mic, contacts, calendar, etc.),
- * which the sandbox profile alone cannot enforce.
+ * which the sandbox profile alone cannot enforce.  --setup-setuid
+ * (ja-fe2) is the second half of the same goal:  with jaim installed
+ * setuid root, users can invoke `jaim -m strict` without sudo, and
+ * do_main() drops privileges immediately so the unprivileged phase
+ * of the program cannot exploit the elevated euid.
+ *
+ * Modified 2026 by Joseph Presley: add setup_setuid() and
+ *   running_executable_path() helpers backing --setup-setuid (ja-fe2).
  */
 
 #include "cred.h"
 #include "err.h"
 
 #include <cerrno>
+#include <climits>
+#include <cstdint>
 #include <print>
 #include <string>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
+
+#include <mach-o/dyld.h>
 
 extern "C" char **environ;
 
@@ -142,6 +155,29 @@ dscl_delete_record(const char *record)
   int r = run_cmd({kDscl, ".", "-delete", record});
   if (r != 0)
     err("dscl . -delete {}: exit {}", record, r);
+}
+
+// Resolve the path of the currently-running executable.  argv[0] is
+// not enough because it may be relative ("./jaim"), PATH-resolved
+// ("jaim"), or a symlink — and chmod/chown on a symlink would mutate
+// the link's target permissions on macOS but not the link itself,
+// which is fine but awkward when we want to report what we actually
+// touched.  _NSGetExecutablePath returns the path used to load the
+// binary; realpath canonicalizes through any symlinks.  Two-call
+// idiom: the first call with a null buffer reports the required
+// size in bufsize.
+std::string
+running_executable_path()
+{
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  std::vector<char> buf(size);
+  if (_NSGetExecutablePath(buf.data(), &size) != 0)
+    err("_NSGetExecutablePath: failed to retrieve executable path");
+  char resolved[PATH_MAX];
+  if (!realpath(buf.data(), resolved))
+    syserr("realpath({})", buf.data());
+  return std::string(resolved);
 }
 
 void
@@ -255,4 +291,37 @@ remove_jaim_user()
   if (!removed)
     std::println("user and group {} not present; nothing to remove",
                  kJaimSystemUser);
+}
+
+void
+setup_setuid()
+{
+  require_root("--setup-setuid");
+
+  std::string p = running_executable_path();
+
+  // chown to root:wheel.  macOS's setuid binaries conventionally
+  // belong to root:wheel (gid 0); chown'ing both fields is a no-op
+  // when the binary is already root-owned, and corrects ownership
+  // when the user installed jaim as themselves.  Without this step,
+  // chmod(... | S_ISUID) can succeed but produce a binary whose
+  // setuid bit elevates to the wrong user.
+  if (chown(p.c_str(), 0, 0))
+    syserr("chown(root:wheel) {}", p);
+
+  // Mode 4555: setuid + r-x for owner/group/other; deliberately no
+  // write bits.  No-write makes the binary tamper-resistant — a
+  // post-install attacker who lands as root could of course just
+  // chmod it back, but this closes the easier path of overwriting
+  // the binary in place via a non-root process that happens to have
+  // ended up with write access from a botched install.  setuid bit
+  // is what actually enables the no-sudo strict-mode use case.
+  mode_t mode = S_ISUID | S_IRUSR | S_IXUSR | S_IRGRP | S_IXGRP
+              | S_IROTH | S_IXOTH;
+  if (chmod(p.c_str(), mode))
+    syserr("chmod(4555) {}", p);
+
+  std::println("installed {} as setuid root (mode 4555)", p);
+  std::println("you can now run `{} -m strict` without sudo",
+               prog.filename().string());
 }
