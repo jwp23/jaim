@@ -69,6 +69,14 @@
  *   need root.  Add --setup-setuid one-shot flag that installs the
  *   running binary mode 4555 so `jaim -m strict` works without sudo
  *   (ja-fe2).
+ * Modified 2026 by Joseph Presley: casual mode now mounts a FUSE
+ *   overlay (jaim-overlay helper) with real $HOME as the read-only
+ *   lower layer and <jail>.changes/ as the writable upper, rewrites
+ *   HOME in the sandboxed env to the mount point, and unmounts +
+ *   reaps the helper in the parent's atexit_fn after the sandbox
+ *   exits.  The SBPL grants file* on the mount and keeps the real
+ *   home denied.  teardown() sweeps stray <jail>.changes/ and
+ *   <jail>.mount/ directories for -u cleanup (ja-ifo).
  */
 
 #include "jaim.h"
@@ -82,10 +90,12 @@
 #include <dirent.h>
 #include <filesystem>
 #include <print>
+#include <span>
 
 #include <libproc.h>
 #include <pwd.h>
 #include <ranges>
+#include <sys/mount.h>
 #include <sys/proc_info.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -311,6 +321,72 @@ sbpl_regex_escape(const std::string &s)
   return ret;
 }
 
+// Casual-mode overlay state lives under the macOS per-user cache dir
+// (/var/folders/<xx>/<yy>/C/jaim/) rather than under $HOME/.jaim/ for
+// a structural reason: jaim-overlay refuses to mount when its upper
+// layer is nested inside its lower layer, because a read of the
+// upper's path through the overlay would trigger a copy-up that
+// resolves back into the upper itself.  The lower is the real $HOME,
+// so the upper has to live outside $HOME.  The macOS user cache dir
+// is persistent (so <jail>.changes/ survives between runs, matching
+// the README's promise that casual mode can edit through a writable
+// overlay), user-private (readable only by the owning uid), and
+// outside $HOME.  Mount points live alongside the upper for the same
+// nesting reason — with the mount under $HOME, a readdir of ~/.jaim
+// would traverse into our own mount and deadlock the FUSE daemon.
+static path
+overlay_state_dir()
+{
+  char buf[4096];
+  size_t n = ::confstr(_CS_DARWIN_USER_CACHE_DIR, buf, sizeof(buf));
+  if (n == 0)
+    syserr("confstr(_CS_DARWIN_USER_CACHE_DIR)");
+  if (n > sizeof(buf))
+    err("confstr(_CS_DARWIN_USER_CACHE_DIR) result too long ({} bytes)", n);
+  path p(buf);
+  // confstr often includes a trailing slash; normalise by appending a
+  // subdir so the composed path is well-formed regardless.
+  return p / "jaim";
+}
+
+// Locate the jaim-overlay helper binary.  Casual mode forks this
+// helper before the sandbox so the sandboxed child sees a writable
+// merged view of the real home.  We look first next to the running
+// jaim binary (prog) so a developer running ./jaim from the build
+// tree picks up ./jaim-overlay, not an older copy in the user's
+// PATH; we then fall through to PATH.  Bails with a clear error if
+// nothing is found — casual mode cannot degrade gracefully, macFUSE
+// and the helper are hard requirements.
+static path
+find_overlay_helper()
+{
+  if (!prog.empty()) {
+    path candidate = prog.parent_path() / "jaim-overlay";
+    if (::access(candidate.c_str(), X_OK) == 0)
+      return weakly_canonical(candidate);
+  }
+  if (const char *pe = getenv("PATH")) {
+    std::string_view path_env(pe);
+    while (!path_env.empty()) {
+      auto pos = path_env.find(':');
+      std::string_view dir = (pos == std::string_view::npos)
+                                 ? path_env
+                                 : path_env.substr(0, pos);
+      if (!dir.empty()) {
+        path candidate = path(std::string(dir)) / "jaim-overlay";
+        if (::access(candidate.c_str(), X_OK) == 0)
+          return weakly_canonical(candidate);
+      }
+      if (pos == std::string_view::npos)
+        break;
+      path_env.remove_prefix(pos + 1);
+    }
+  }
+  err("jaim-overlay helper not found (looked next to jaim and on PATH); "
+      "casual mode requires it — install macFUSE 5.2+ and rebuild, or "
+      "use --mode=bare or --mode=strict");
+}
+
 std::string
 Config::generate_sandbox_profile()
 {
@@ -444,32 +520,46 @@ Config::generate_sandbox_profile()
 
   // Mode-specific home directory access
   if (mode_ == kCasual) {
-    // Casual: read-only access to the real home directory, excluding
-    // masked paths.  Writes go through the CWD allow rule below (which
-    // grants file*), or through explicit --dir / --rdir grants.  jaim
-    // has no overlay filesystem, so granting file* on $HOME would
-    // touch real files on disk — contradicting the README's promise
-    // that casual mode protects against accidental deletion.  Use
-    // require-all with require-not to properly exclude masked paths,
-    // since Seatbelt's allow rules take precedence over later deny
-    // rules.
-    const char *access = "file-read*";
-    if (mask_files_.empty()) {
-      p += std::format("(allow {} (subpath \"{}\"))\n",
-                       access, sbpl_escape(homepath_.string()));
-    }
-    else {
-      p += std::format("(allow {}\n", access);
-      p += "  (require-all\n";
-      p += std::format("    (subpath \"{}\")\n",
-                       sbpl_escape(homepath_.string()));
-      for (const auto &m : mask_files_) {
-        auto masked = homepath_ / m;
-        p += std::format("    (require-not (subpath \"{}\"))\n",
-                         sbpl_escape(masked.string()));
+    // Casual mode sees two views of the home directory:
+    //   1. The real home at homepath_ is read-only via absolute
+    //      paths, with masked subtrees excluded.  Preserved from the
+    //      pre-overlay policy so tools that reference /Users/<user>/…
+    //      by absolute path (git worktrees, build scripts, the user's
+    //      own cwd when running jaim from inside $HOME) still work
+    //      without modification.
+    //   2. overlay_mount_ — a FUSE overlay stood up by exec() before
+    //      the sandbox fork — is fully read/write.  The overlay
+    //      merges the real home (lower, read-only) with a per-jail
+    //      writable upper (<jail>.changes/ under the macOS user
+    //      cache dir), so writes from the sandbox land in the upper
+    //      layer without ever touching the real home on disk.  The
+    //      sandbox's $HOME env var is rewritten to overlay_mount_
+    //      by exec(), so tools that resolve ~ or read $HOME pick up
+    //      the writable view automatically.
+    // Both views apply masks via require-not so sensitive subtrees
+    // (.ssh, .aws, etc.) stay inaccessible regardless of which path
+    // the sandbox uses.
+    auto emit_home_rule = [&](const char *access, const path &base) {
+      auto base_str = sbpl_escape(base.string());
+      if (mask_files_.empty()) {
+        p += std::format("(allow {} (subpath \"{}\"))\n", access, base_str);
       }
-      p += "  ))\n";
-    }
+      else {
+        p += std::format("(allow {}\n", access);
+        p += "  (require-all\n";
+        p += std::format("    (subpath \"{}\")\n", base_str);
+        for (const auto &m : mask_files_) {
+          auto masked = base / m;
+          p += std::format("    (require-not (subpath \"{}\"))\n",
+                           sbpl_escape(masked.string()));
+        }
+        p += "  ))\n";
+      }
+    };
+    emit_home_rule("file-read*", homepath_);
+    if (overlay_mount_.empty())
+      err<std::logic_error>("generate_sandbox_profile: overlay_mount_ unset");
+    emit_home_rule("file*", overlay_mount_);
     p += "\n";
 
     // SSH allow-list carve-outs: when the entire ~/.ssh tree is masked
@@ -477,27 +567,18 @@ Config::generate_sandbox_profile()
     // that SSH clients and related tooling normally need.  Deny-by-
     // default under ~/.ssh keeps privately-named key files out of
     // reach regardless of their naming convention; enumerating denies
-    // does not.
-    if (mask_files_.contains(path(".ssh"))) {
-      auto ssh = homepath_ / ".ssh";
-      auto ssh_str = sbpl_escape(ssh.string());
-      // SSH agent sockets (directory subpath so the whole agent dir
-      // including per-session sockets is reachable).
-      p += std::format("(allow {} (subpath \"{}/agent\"))\n",
-                       access, ssh_str);
-      // Host key database.
-      p += std::format("(allow {} (literal \"{}/known_hosts\"))\n",
-                       access, ssh_str);
-      p += std::format("(allow {} (literal \"{}/known_hosts.old\"))\n",
-                       access, ssh_str);
-      // Public keys — readable from sandboxed tooling (git, ssh-add
-      // -L, etc.), but not writable, since modifying a .pub file
-      // does not require sandbox write access.  Seatbelt's #"..."
-      // regex literal is a raw string: backslashes pass through to
-      // the regex engine unchanged, so we emit single backslashes
-      // only.  Quotes inside the regex still have to be escaped.
+    // does not.  Emitted twice — once for the real-home view and
+    // once for the overlay view — so the carve-outs work regardless
+    // of which path the sandbox reaches for.
+    auto emit_ssh_carveouts = [&](const path &ssh_base) {
+      auto ssh_str = sbpl_escape(ssh_base.string());
+      p += std::format("(allow file-read* (subpath \"{}/agent\"))\n", ssh_str);
+      p += std::format("(allow file-read* (literal \"{}/known_hosts\"))\n",
+                       ssh_str);
+      p += std::format("(allow file-read* (literal \"{}/known_hosts.old\"))\n",
+                       ssh_str);
       auto pub_regex = std::format("^{}/[^/]+\\.pub$",
-                                   sbpl_regex_escape(ssh.string()));
+                                   sbpl_regex_escape(ssh_base.string()));
       std::string pub_regex_quoted;
       for (char c : pub_regex) {
         if (c == '"')
@@ -506,6 +587,10 @@ Config::generate_sandbox_profile()
       }
       p += std::format("(allow file-read* (regex #\"{}\"))\n",
                        pub_regex_quoted);
+    };
+    if (mask_files_.contains(path(".ssh"))) {
+      emit_ssh_carveouts(homepath_ / ".ssh");
+      emit_ssh_carveouts(overlay_mount_ / ".ssh");
       p += "\n";
     }
   }
@@ -772,6 +857,27 @@ Config::exec(char **argv)
           prog.filename().string());
   }
 
+  // Pre-flight: reject an invocation whose CWD is inside a masked
+  // subtree before we allocate any heavyweight state (private tmp,
+  // bare private home, casual overlay daemon).  The check also runs
+  // inside generate_sandbox_profile() as a backstop, but doing it
+  // here first means a clean err() does not leak a running FUSE
+  // daemon in casual mode — the overlay is the most expensive
+  // resource exec() sets up, and the CWD-masked-path error is the
+  // most likely pre-fork failure mode for users who `cd` into
+  // ~/.ssh or similar.
+  if (grant_cwd_) {
+    const auto &c = cwd();
+    for (const auto &m : mask_files_) {
+      auto masked = homepath_ / m;
+      if (contains(masked, c))
+        err("refusing to grant CWD access: {} is inside masked path {}.\n"
+            "  Use -D/--nocwd to disable CWD access, or cd to a different "
+            "directory.",
+            c.string(), masked.string());
+    }
+  }
+
   // Per-invocation private temp directory.  Created first because
   // make_script() drops the JAIM_SCRIPT file here, generate_sandbox_profile()
   // embeds the resolved path in its allow rule, and make_env() in the
@@ -816,6 +922,153 @@ Config::exec(char **argv)
     setenv_.insert_or_assign(
         "HOME", std::format("HOME={}", private_home_.string()));
   }
+
+  // Casual mode: start the FUSE overlay that backs the sandbox's view
+  // of $HOME.  The overlay merges the real home (read-only lower)
+  // with a writable <jail>.changes/ upper directory, so the sandbox
+  // can edit, create, and delete files under ~ without any of those
+  // operations escaping the jail.  We fork jaim-overlay in foreground
+  // mode (-f) so we own the helper's pid, which lets us tell whether
+  // the mount actually came up and lets atexit_fn reap the helper
+  // cleanly when the sandbox exits.
+  //
+  // Ordering matters:
+  //   - Before generate_sandbox_profile(), so overlay_mount_ is set
+  //     by the time the SBPL allow-rule reads it.
+  //   - Before make_env(), so the HOME rewrite below beats the
+  //     inherited-HOME fallback in make_env()'s try_emplace.
+  //   - Before the sandbox fork, so any mount failure aborts with a
+  //     clean error and no sandboxed child is ever launched against
+  //     a half-set-up overlay.
+  if (mode_ == kCasual) {
+    // Upper and mount live in /var/folders/<xx>/<yy>/C/jaim/ rather
+    // than under $HOME/.jaim/, because jaim-overlay refuses to mount
+    // nested layers (upper inside lower, or mount inside lower).
+    // See overlay_state_dir() above for the full rationale.
+    path state_root = overlay_state_dir();
+    // ensure_dir walks the absolute path and creates each missing
+    // component; the /var/folders/<xx>/<yy>/C/ ancestors are already
+    // created by the OS, so this normally just mkdirs our own leaf.
+    Fd state_fd = ensure_udir(AT_FDCWD, state_root);
+
+    path upper_name = cat(sandbox_name_, ".changes");
+    Fd upper_fd = ensure_udir(*state_fd, upper_name);
+    overlay_upper_ = canonical(path(fdpath(*upper_fd)));
+
+    path mount_name = cat(sandbox_name_, ".mount");
+    Fd mount_fd = ensure_udir(*state_fd, mount_name);
+    overlay_mount_ = canonical(path(fdpath(*mount_fd)));
+
+    // If the mount point is already a mount (a previous jaim crashed
+    // before atexit_fn could unmount), reuse-the-slot is risky:
+    // macFUSE may refuse to mount on top, and the old mount could
+    // still be backed by a now-dead helper.  Force-unmount any stale
+    // mount on the same path before starting our own.  Best-effort:
+    // a non-zero return just means "nothing to tear down" most of
+    // the time, so we do not fail here.
+    {
+      struct stat mnt_sb, par_sb;
+      if (::stat(overlay_mount_.c_str(), &mnt_sb) == 0 &&
+          ::stat(overlay_mount_.parent_path().c_str(), &par_sb) == 0 &&
+          mnt_sb.st_dev != par_sb.st_dev)
+        ::unmount(overlay_mount_.c_str(), MNT_FORCE);
+    }
+
+    path helper = find_overlay_helper();
+
+    // Record the mount point's pre-mount device so we can detect
+    // "mount published" by watching for st_dev to change.  The mount
+    // point sits on the real home's filesystem before FUSE attaches;
+    // after mount, its st_dev switches to the FUSE-assigned dev.
+    struct stat pre_sb;
+    if (::stat(overlay_mount_.c_str(), &pre_sb))
+      syserr("stat({})", overlay_mount_.string());
+
+    overlay_pid_ = xfork();
+    if (overlay_pid_ == 0) {
+      // Helper child: exec jaim-overlay in foreground so its lifetime
+      // is bound to our process.  -f keeps the helper attached; it
+      // prints to our stderr on failure, and when we SIGTERM it on
+      // teardown the kernel drops the mount cleanly.
+      try {
+        auto lower_arg = std::format("--lower={}", homepath_.string());
+        auto upper_arg = std::format("--upper={}", overlay_upper_.string());
+        execl(helper.c_str(), helper.c_str(), "-f", lower_arg.c_str(),
+              upper_arg.c_str(), overlay_mount_.c_str(),
+              static_cast<const char *>(nullptr));
+        syserr("execl({})", helper.string());
+      } catch (const std::exception &e) {
+        warn("{}", e.what());
+        _exit(199);
+      }
+    }
+
+    // Parent: poll until either the mount shows up (st_dev changes)
+    // or the helper exits (which means mount failed).  100 attempts
+    // × 50ms = 5s ceiling before we give up; macFUSE's FSKit backend
+    // usually publishes the mount in well under a second, so this
+    // is a conservative timeout for unusual conditions (slow first
+    // load of the kext-less backend, host under heavy load).
+    bool mounted = false;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      struct stat post_sb;
+      if (::stat(overlay_mount_.c_str(), &post_sb) == 0 &&
+          post_sb.st_dev != pre_sb.st_dev) {
+        mounted = true;
+        break;
+      }
+      int status;
+      pid_t w = waitpid(overlay_pid_, &status, WNOHANG);
+      if (w == overlay_pid_) {
+        overlay_pid_ = 0;
+        err("jaim-overlay exited before mount was ready; "
+            "is macFUSE 5.2+ installed?");
+      }
+      usleep(50'000);
+    }
+    if (!mounted) {
+      kill(overlay_pid_, SIGTERM);
+      int status;
+      while (waitpid(overlay_pid_, &status, 0) == -1 && errno == EINTR)
+        ;
+      overlay_pid_ = 0;
+      err("jaim-overlay failed to mount within timeout at {}",
+          overlay_mount_.string());
+    }
+    overlay_mounted_ = true;
+
+    // Rewrite HOME so the sandbox sees the overlay as $HOME.  Same
+    // rationale as bare mode: the profile denies the real home, so
+    // honoring any user-supplied HOME would break every tool that
+    // reads $HOME or resolves ~.
+    setenv_.insert_or_assign(
+        "HOME", std::format("HOME={}", overlay_mount_.string()));
+  }
+
+  // If anything between here and fork throws (chown, ACL sweep, profile
+  // gen), the overlay helper and private_tmp_ would otherwise leak — the
+  // post-fork atexit_fn is only wired into the waitpid loop and never
+  // runs for pre-fork failures.  Defer registers best-effort cleanup
+  // that release()s on success once fork completes, so the normal
+  // path costs nothing.
+  Defer pre_fork_cleanup{[this] {
+    if (overlay_mounted_ && !overlay_mount_.empty()) {
+      if (::unmount(overlay_mount_.c_str(), 0) != 0)
+        ::unmount(overlay_mount_.c_str(), MNT_FORCE);
+      overlay_mounted_ = false;
+    }
+    if (overlay_pid_ > 0) {
+      kill(overlay_pid_, SIGTERM);
+      int status;
+      while (waitpid(overlay_pid_, &status, 0) == -1 && errno == EINTR)
+        ;
+      overlay_pid_ = 0;
+    }
+    if (!private_tmp_.empty()) {
+      std::error_code ec;
+      std::filesystem::remove_all(private_tmp_, ec);
+    }
+  }};
 
   auto script_path = make_script();
 
@@ -878,6 +1131,11 @@ Config::exec(char **argv)
 
   // Generate the sandbox profile
   auto profile = generate_sandbox_profile();
+
+  // All pre-flight checks passed; hand cleanup off to the post-fork
+  // atexit_fn so the Defer does not unmount the overlay out from under
+  // the sandboxed child.
+  pre_fork_cleanup.release();
 
   auto pid = xfork();
   if (!pid) {
@@ -1001,6 +1259,42 @@ Config::exec(char **argv)
           warn("{}", e.what());
         }
     }
+    // Casual mode: tear down the FUSE overlay.  unmount() tells the
+    // kernel to drop the mount, which makes the helper's fuse_main
+    // loop return, after which the helper exits on its own and we
+    // reap it.  If unmount fails (EBUSY — a sandboxed descendant
+    // still has an open fd under the mount, a forked orphan), fall
+    // back to MNT_FORCE so we do not block teardown indefinitely.
+    // SIGTERM as a last resort before reap, in case the helper is
+    // wedged and unmount cannot shake it loose.  Errors are warned
+    // but never fatal: atexit_fn runs on the tail of a waitpid or a
+    // signal propagation, and aborting here would leak state worse
+    // than the best-effort sweep.
+    if (overlay_mounted_ && !overlay_mount_.empty()) {
+      if (::unmount(overlay_mount_.c_str(), 0) != 0) {
+        if (errno != EINVAL && errno != ENOENT)
+          ::unmount(overlay_mount_.c_str(), MNT_FORCE);
+      }
+      overlay_mounted_ = false;
+    }
+    if (overlay_pid_ > 0) {
+      // Give the helper a beat to exit after unmount, then nudge it.
+      int status;
+      for (int i = 0; i < 20; ++i) {
+        pid_t w = waitpid(overlay_pid_, &status, WNOHANG);
+        if (w == overlay_pid_) {
+          overlay_pid_ = 0;
+          break;
+        }
+        usleep(50'000);
+      }
+      if (overlay_pid_ > 0) {
+        kill(overlay_pid_, SIGTERM);
+        while (waitpid(overlay_pid_, &status, 0) == -1 && errno == EINTR)
+          ;
+        overlay_pid_ = 0;
+      }
+    }
     if (!private_tmp_.empty()) {
       std::error_code ec;
       std::filesystem::remove_all(private_tmp_, ec);
@@ -1025,19 +1319,76 @@ Config::exec(char **argv)
 void
 Config::teardown()
 {
-  // Runs for `jaim -u`.  Upstream jai also unmounts overlayfs mounts
-  // here; jaim's macOS port has no overlay filesystem (seatbelt
-  // enforces isolation in-kernel without any user-visible mount), so
-  // the only host-visible state a finished sandbox can leave behind
-  // is the per-jail private home (bare mode, persistent across runs
-  // by design) and the per-invocation private tmp dir (normally
-  // swept by exec()'s atexit_fn, but a signal-killed parent can leak
-  // one).  Everything we touch sits under paths the user owns, so
-  // teardown never needs elevated privileges.
+  // Runs for `jaim -u`.  Sweeps per-jail artifacts across two roots:
+  // bare mode's <name>.home/ under homejaimpath_, and casual mode's
+  // <name>.changes/ and <name>.mount/ under the macOS per-user cache
+  // dir (see overlay_state_dir()).  The split exists because the
+  // overlay's upper layer cannot be nested inside its lower (the
+  // real home), so casual state lives outside $HOME; we handle both
+  // with the same sweep logic.  The mount point may still be a live
+  // mount if a signal killed the parent before atexit_fn could
+  // unmount it; unmount before remove_all.  Everything we touch
+  // sits under paths the user owns, so teardown never needs
+  // elevated privileges.
 
-  // Per-jail private homes: <name>.home/ under homejaimpath_.  Skip
-  // silently if homejaimpath_ itself does not exist yet — `jaim -u`
-  // before `jaim --init` has nothing to clean.
+  // Sweep one directory tree, looking for entries whose name ends
+  // with any of `suffixes` and treating each unique prefix as a jail
+  // name.  Used once for bare mode under homejaimpath_ and once for
+  // casual mode under overlay_state_dir().
+  auto sweep_root = [this](int root_fd, const path &root_display,
+                           std::span<const std::string_view> suffixes) {
+    auto remove_one = [&](const path &name, std::string_view suffix) {
+      path full = root_display / cat(name, path(std::string(suffix)));
+      if (suffix == ".mount") {
+        struct stat mnt_sb, par_sb;
+        if (::stat(full.c_str(), &mnt_sb) == 0 &&
+            ::stat(full.parent_path().c_str(), &par_sb) == 0 &&
+            mnt_sb.st_dev != par_sb.st_dev) {
+          if (::unmount(full.c_str(), 0) != 0)
+            ::unmount(full.c_str(), MNT_FORCE);
+        }
+      }
+      std::error_code ec;
+      auto n = std::filesystem::remove_all(full, ec);
+      if (ec)
+        warn("{}: {}", full.string(), ec.message());
+      else if (n > 0)
+        std::println("removed {}", full.string());
+    };
+
+    if (!sandbox_name_.empty()) {
+      for (auto s : suffixes)
+        remove_one(sandbox_name_, s);
+      return;
+    }
+    // Buffer the base names first:  remove_all mutates the dir
+    // under the same fd readdir is iterating, and the results
+    // are implementation-defined.  Collect a deduplicated set of
+    // jail names across all suffixes so each jail is cleaned
+    // exactly once by the outer loop.
+    std::set<path, PathLess> names;
+    if (auto d = try_opendir(root_fd)) {
+      while (auto de = readdir(*d)) {
+        std::string_view nm = d_name(de);
+        if (nm == "." || nm == "..")
+          continue;
+        if (de->d_type != DT_DIR && de->d_type != DT_UNKNOWN)
+          continue;
+        for (auto s : suffixes)
+          if (nm.ends_with(s)) {
+            names.emplace(nm.substr(0, nm.size() - s.size()));
+            break;
+          }
+      }
+    }
+    for (const auto &n : names)
+      for (auto s : suffixes)
+        remove_one(n, s);
+  };
+
+  // Bare-mode sweep: .home under homejaimpath_.  Skip silently if
+  // homejaimpath_ itself does not exist yet — `jaim -u` before
+  // `jaim --init` has nothing to clean in that root.
   Fd hj;
   if (int fd = openat(home(), homejaimpath_.c_str(),
                       O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -1047,42 +1398,27 @@ Config::teardown()
   }
   else if (errno != ENOENT)
     syserr("{}", fdpath(home(), homejaimpath_));
-
-  auto remove_home_dir = [this](const path &name) {
-    path full = homejaimpath_ / cat(name, ".home");
-    std::error_code ec;
-    auto n = std::filesystem::remove_all(full, ec);
-    if (ec)
-      warn("{}: {}", full.string(), ec.message());
-    else if (n > 0)
-      std::println("removed {}", full.string());
-  };
-
   if (hj) {
-    if (!sandbox_name_.empty())
-      remove_home_dir(sandbox_name_);
-    else {
-      // Buffer the names first:  remove_all mutates the directory
-      // under the same fd readdir is iterating, and the results are
-      // implementation-defined.
-      std::vector<path> names;
-      if (auto d = try_opendir(*hj)) {
-        while (auto de = readdir(*d)) {
-          std::string_view nm = d_name(de);
-          if (nm == "." || nm == "..")
-            continue;
-          constexpr std::string_view suffix = ".home";
-          if (!nm.ends_with(suffix))
-            continue;
-          if (de->d_type != DT_DIR && de->d_type != DT_UNKNOWN)
-            continue;
-          names.emplace_back(nm.substr(0, nm.size() - suffix.size()));
-        }
-      }
-      for (const auto &n : names)
-        remove_home_dir(n);
-    }
+    static constexpr std::array<std::string_view, 1> home_suffixes{".home"};
+    sweep_root(*hj, homejaimpath_, home_suffixes);
   }
+
+  // Casual-mode sweep: .mount and .changes under overlay_state_dir().
+  // Ordered .mount first so the unmount precedes removal of the
+  // sibling changes dir (see sweep_root for rationale).  The state
+  // dir may not exist if casual mode has never run on this host;
+  // treat ENOENT as "nothing to sweep".
+  path state_root = overlay_state_dir();
+  if (Fd sf(openat(AT_FDCWD, state_root.c_str(),
+                   O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+      sf) {
+    check_user(*sf);
+    static constexpr std::array<std::string_view, 2> overlay_suffixes{
+        ".mount", ".changes"};
+    sweep_root(*sf, state_root, overlay_suffixes);
+  }
+  else if (errno != ENOENT)
+    syserr("{}", state_root.string());
 
   // Stray per-invocation private tmp dirs (jaim.XXXXXXXX under the
   // system TMPDIR).  exec()'s atexit_fn removes these on a normal

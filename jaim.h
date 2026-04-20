@@ -31,6 +31,11 @@
  *   UID separation; exec() looks up _jaim once in the parent and the
  *   forked child calls enter_permanently() on it before sandbox_init
  *   (ja-txx).
+ * Modified 2026 by Joseph Presley: add overlay_upper_, overlay_mount_,
+ *   overlay_pid_, and overlay_mounted_ for casual-mode FUSE overlay
+ *   integration.  exec() starts the jaim-overlay helper before fork
+ *   so the sandbox sees a writable merged view of the real home
+ *   (ja-ifo).
  */
 
 #pragma once
@@ -150,6 +155,25 @@ struct Config {
   // err() with a helpful pointer at `sudo ... --setup-user`, before
   // any temp dirs or HOME rewrites have been set up.
   Credentials jaim_user_cred_;
+
+  // Casual-mode FUSE overlay state.  The overlay merges the real home
+  // (read-only lower) with a writable per-jail upper directory so the
+  // sandbox can edit, create, and delete files in a view of $HOME
+  // without touching the real home on disk — writes land in the upper
+  // layer under homejaimpath_/<jail>.changes/.  exec() creates both
+  // the upper and the mount point, forks the jaim-overlay helper
+  // (foreground) before the sandbox fork, waits for the kernel to
+  // publish the mount, and rewrites HOME in the sandboxed env to
+  // point at overlay_mount_.  generate_sandbox_profile() grants
+  // file* on overlay_mount_ (with masks reapplied under the mount
+  // path) and denies the real home via the default-deny rule.  The
+  // parent's atexit_fn calls unmount() and reaps the helper after
+  // the sandbox exits.  All four fields stay empty outside casual
+  // mode.
+  path overlay_upper_;
+  path overlay_mount_;
+  pid_t overlay_pid_{0};
+  bool overlay_mounted_{false};
 
   Fd home_fd_;
   Fd home_jaim_fd_;
