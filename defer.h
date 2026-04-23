@@ -15,6 +15,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Modified 2026 by Claude Opus 4.7 (supervised by Greg Slepak): replace
+ *   C++23 "deducing this" member templates in RaiiHelper with traditional
+ *   const/non-const overloads so the code compiles on Apple clang 16
+ *   (pre-Tahoe macOS).
  */
 
 #pragma once
@@ -75,8 +80,12 @@ struct RaiiHelper {
   }
 
   explicit operator bool() const noexcept { return t_ != Empty; }
-  decltype(auto) operator*(this auto &&self) noexcept { return (self.t_); }
-  auto addr(this auto &&self) noexcept { return std::addressof(self); }
+  T &operator*() & noexcept { return t_; }
+  const T &operator*() const & noexcept { return t_; }
+  T &&operator*() && noexcept { return std::move(t_); }
+  const T &&operator*() const && noexcept { return std::move(t_); }
+  RaiiHelper *addr() & noexcept { return this; }
+  const RaiiHelper *addr() const & noexcept { return this; }
 
   // For legacy libraries that want a T**, return that type for &
   template<std::same_as<T> U = T> requires std::is_pointer_v<U>
@@ -90,7 +99,8 @@ struct RaiiHelper {
   {
     return t_;
   }
-  decltype(auto) operator->(this auto &&self) noexcept { return (self.t_); }
+  T &operator->() & noexcept { return t_; }
+  const T &operator->() const & noexcept { return t_; }
 
   T release() noexcept { return std::exchange(t_, Empty); }
 };

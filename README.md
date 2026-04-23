@@ -96,9 +96,10 @@ I will do my best to keep up with the changes made in the jai project.
 
 * macOS on Apple Silicon (arm64)
 * **Xcode Command Line Tools** -- install with `xcode-select --install`.
-  This provides the `clang++` compiler. jaim needs C++23 support
-  (Xcode 16+ / Apple Clang 18+); if the build fails with errors about
-  unknown C++ features, update Xcode from the App Store.
+  This provides the `clang++` compiler. jaim needs a C++23-capable
+  compiler; Xcode 16 / Apple Clang 16 or newer is sufficient. If the
+  build fails with errors about unknown C++ features, update Xcode from
+  the App Store.
 * *Optional:* `autoconf` and `automake` -- only needed for the autotools
   build (`brew install autoconf automake`).
 * *Optional:* `pandoc` -- only needed to regenerate the `jaim.1` man
