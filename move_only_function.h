@@ -15,6 +15,10 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Modified 2026 by Claude Opus 4.7 (supervised by Greg Slepak): match
+ *   forward declaration tag (class) to the primary template to silence
+ *   -Wmismatched-tags.
  */
 
 #pragma once
@@ -29,7 +33,7 @@ using std::move_only_function;
 
 #include <memory>
 
-template<typename F> struct move_only_function;
+template<typename F> class move_only_function;
 
 template<typename R, typename... Args, bool NE>
 class move_only_function<R(Args...) noexcept(NE)> {
